@@ -1,0 +1,715 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import {
+  Users,
+  Search,
+  Plus,
+  Pencil,
+  Trash2,
+  Receipt,
+  Mail,
+  Phone,
+  MapPin,
+  Loader2,
+  AlertTriangle,
+} from 'lucide-react'
+import { Card, CardContent } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { ClientAvatar } from '@/components/ClientAvatar'
+import { clientsService } from '@/services/clients'
+import { chargesService } from '@/services/charges'
+import { useRealtime } from '@/hooks/use-realtime'
+import { useToast } from '@/hooks/use-toast'
+import type { ClientRecord, ClientFormData, ChargeRecord } from '@/types'
+import { formatDocument, formatPhone } from '@/lib/formatters'
+
+export default function ClientsPage() {
+  const [clients, setClients] = useState<ClientRecord[]>([])
+  const [charges, setCharges] = useState<ChargeRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+
+  // Modais de Criação/Edição e Exclusão
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [isFormOpen, setIsFormOpen] = useState(false)
+  const [editingClient, setEditingClient] = useState<ClientRecord | null>(null)
+
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false)
+  const [deletingClient, setDeletingClient] = useState<ClientRecord | null>(null)
+
+  // Form state
+  const [formData, setFormData] = useState<ClientFormData>({
+    name: '',
+    email: '',
+    document: '',
+    phone: '',
+    address: '',
+    city: '',
+    state: '',
+  })
+  const [formLoading, setFormLoading] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+
+  const { toast } = useToast()
+
+  const loadData = useCallback(async () => {
+    try {
+      const [allClients, allCharges] = await Promise.all([
+        clientsService.getAll(),
+        chargesService.getAll(),
+      ])
+      setClients(allClients)
+      setCharges(allCharges)
+    } catch (err) {
+      console.error('Erro ao carregar clientes:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadData()
+  }, [loadData])
+
+  // Real-time
+  useRealtime('clients', () => {
+    loadData()
+  })
+  useRealtime('charges', () => {
+    loadData()
+  })
+
+  // Mapa de contagem de cobranças por cliente
+  const chargeCountMap = useMemo(() => {
+    const map = new Map<string, number>()
+    charges.forEach((c) => {
+      map.set(c.client, (map.get(c.client) || 0) + 1)
+    })
+    return map
+  }, [charges])
+
+  // Handle URL query parameters para sincronizar modal
+  useEffect(() => {
+    const newParam = searchParams.get('new')
+    const editId = searchParams.get('edit')
+
+    if (newParam === 'true') {
+      setEditingClient(null)
+      setFormData({
+        name: '',
+        email: '',
+        document: '',
+        phone: '',
+        address: '',
+        city: '',
+        state: '',
+      })
+      setIsFormOpen(true)
+    } else if (editId && clients.length > 0) {
+      const found = clients.find((c) => c.id === editId)
+      if (found) {
+        setEditingClient(found)
+        setFormData({
+          name: found.name,
+          email: found.email || '',
+          document: formatDocument(found.document),
+          phone: formatPhone(found.phone),
+          address: found.address || '',
+          city: found.city || '',
+          state: found.state || '',
+        })
+        setIsFormOpen(true)
+      }
+    }
+  }, [searchParams, clients])
+
+  const handleOpenCreate = () => {
+    setEditingClient(null)
+    setFormData({
+      name: '',
+      email: '',
+      document: '',
+      phone: '',
+      address: '',
+      city: '',
+      state: '',
+    })
+    setFormError(null)
+    setIsFormOpen(true)
+    setSearchParams({ new: 'true' })
+  }
+
+  const handleOpenEdit = (client: ClientRecord) => {
+    setEditingClient(client)
+    setFormData({
+      name: client.name,
+      email: client.email || '',
+      document: formatDocument(client.document),
+      phone: formatPhone(client.phone),
+      address: client.address || '',
+      city: client.city || '',
+      state: client.state || '',
+    })
+    setFormError(null)
+    setIsFormOpen(true)
+    setSearchParams({ edit: client.id })
+  }
+
+  const handleCloseForm = () => {
+    setIsFormOpen(false)
+    setEditingClient(null)
+    setSearchParams({})
+  }
+
+  const handleOpenDelete = (client: ClientRecord) => {
+    setDeletingClient(client)
+    setIsDeleteOpen(true)
+  }
+
+  const handleCloseDelete = () => {
+    setIsDeleteOpen(false)
+    setDeletingClient(null)
+  }
+
+  // Submissão do formulário
+  const handleSubmitForm = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setFormError(null)
+
+    if (!formData.name || formData.name.trim().length < 2) {
+      setFormError('O nome do cliente é obrigatório e deve ter no mínimo 2 caracteres.')
+      return
+    }
+
+    setFormLoading(true)
+    try {
+      if (editingClient) {
+        await clientsService.update(editingClient.id, formData)
+        toast({
+          title: 'Cliente atualizado',
+          description: `Os dados de ${formData.name} foram atualizados com sucesso.`,
+        })
+      } else {
+        await clientsService.create(formData)
+        toast({
+          title: 'Cliente cadastrado',
+          description: `${formData.name} foi adicionado à sua base de clientes.`,
+        })
+      }
+      handleCloseForm()
+      loadData()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Falha ao salvar dados do cliente.'
+      setFormError(msg)
+      toast({
+        title: 'Erro ao salvar',
+        description: msg,
+        variant: 'destructive',
+      })
+    } finally {
+      setFormLoading(false)
+    }
+  }
+
+  // Exclusão do cliente
+  const handleConfirmDelete = async () => {
+    if (!deletingClient) return
+    setFormLoading(true)
+    try {
+      await clientsService.delete(deletingClient.id)
+      toast({
+        title: 'Cliente excluído',
+        description: `O cliente ${deletingClient.name} e suas cobranças vinculadas foram removidos.`,
+      })
+      handleCloseDelete()
+      loadData()
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Erro ao excluir cliente.'
+      toast({
+        title: 'Falha na exclusão',
+        description: msg,
+        variant: 'destructive',
+      })
+    } finally {
+      setFormLoading(false)
+    }
+  }
+
+  // Filtro de busca por nome, email ou documento
+  const filteredClients = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return clients
+
+    return clients.filter((c) => {
+      const nameMatch = c.name?.toLowerCase().includes(q)
+      const emailMatch = c.email?.toLowerCase().includes(q)
+      const docMatch = c.document?.replace(/\D/g, '').includes(q.replace(/\D/g, ''))
+      const phoneMatch = c.phone?.replace(/\D/g, '').includes(q.replace(/\D/g, ''))
+      return nameMatch || emailMatch || docMatch || phoneMatch
+    })
+  }, [clients, search])
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Clientes</h1>
+          <p className="text-sm text-slate-500 mt-0.5">
+            Gerencie sua carteira de clientes, dados cadastrais e histórico de cobranças
+          </p>
+        </div>
+        <Button
+          onClick={handleOpenCreate}
+          className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-xs"
+        >
+          <Plus className="w-4 h-4 mr-1.5" />
+          Novo Cliente
+        </Button>
+      </div>
+
+      {/* Barra de Busca */}
+      <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs flex items-center gap-3">
+        <Search className="w-4 h-4 text-slate-400 ml-1" />
+        <Input
+          type="text"
+          placeholder="Buscar por nome, email, CPF ou CNPJ..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border-0 shadow-none focus-visible:ring-0 px-0 text-sm h-auto placeholder:text-slate-400"
+        />
+        {search && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSearch('')}
+            className="text-xs text-slate-400 hover:text-slate-600 h-7 px-2"
+          >
+            Limpar
+          </Button>
+        )}
+      </div>
+
+      {/* Conteúdo Principal */}
+      {loading ? (
+        <div className="flex flex-col items-center justify-center min-h-[300px]">
+          <Loader2 className="w-8 h-8 text-indigo-600 animate-spin mb-3" />
+          <p className="text-sm text-slate-500">Carregando lista de clientes...</p>
+        </div>
+      ) : filteredClients.length === 0 ? (
+        /* Empty State */
+        <Card className="rounded-xl border border-slate-200/80 shadow-xs">
+          <CardContent className="py-16 px-4 text-center">
+            <div className="w-14 h-14 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto mb-4 border border-indigo-100">
+              <Users className="w-7 h-7" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900">
+              {search ? 'Nenhum cliente encontrado' : 'Nenhum cliente cadastrado'}
+            </h3>
+            <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+              {search
+                ? `Nenhum resultado corresponde à busca "${search}". Tente outro termo.`
+                : 'Cadastre seu primeiro cliente para começar a emitir e acompanhar cobranças.'}
+            </p>
+            <div className="mt-5">
+              {search ? (
+                <Button variant="outline" onClick={() => setSearch('')} size="sm">
+                  Limpar busca
+                </Button>
+              ) : (
+                <Button
+                  onClick={handleOpenCreate}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1.5" />
+                  Cadastrar cliente
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <>
+          {/* Tabela Desktop / Tablet (>640px) */}
+          <div className="hidden sm:block bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50/75 border-b border-slate-200 text-slate-500 uppercase tracking-wider font-semibold">
+                  <tr>
+                    <th className="py-3.5 px-6">Cliente</th>
+                    <th className="py-3.5 px-6">Documento</th>
+                    <th className="py-3.5 px-6">Telefone</th>
+                    <th className="py-3.5 px-6">Localização</th>
+                    <th className="py-3.5 px-6 text-center">Cobranças</th>
+                    <th className="py-3.5 px-6 text-right">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredClients.map((client, index) => {
+                    const count = chargeCountMap.get(client.id) || 0
+                    return (
+                      <tr
+                        key={client.id}
+                        className={
+                          index % 2 === 1
+                            ? 'bg-slate-50/40 hover:bg-slate-100/60 transition-colors'
+                            : 'hover:bg-slate-100/60 transition-colors'
+                        }
+                      >
+                        <td className="py-3.5 px-6">
+                          <div className="flex items-center gap-3">
+                            <ClientAvatar name={client.name} size="md" />
+                            <div className="min-w-0">
+                              <p className="font-semibold text-slate-900 text-sm truncate">
+                                {client.name}
+                              </p>
+                              {client.email ? (
+                                <p className="text-slate-500 text-xs truncate flex items-center gap-1 mt-0.5">
+                                  <Mail className="w-3 h-3 text-slate-400 inline shrink-0" />
+                                  {client.email}
+                                </p>
+                              ) : (
+                                <p className="text-slate-400 text-xs italic">Sem email</p>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-6">
+                          <span className="font-mono text-slate-700">
+                            {formatDocument(client.document)}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-6 text-slate-600">
+                          {client.phone ? (
+                            <span className="flex items-center gap-1.5">
+                              <Phone className="w-3.5 h-3.5 text-slate-400" />
+                              {formatPhone(client.phone)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-6 text-slate-600">
+                          {client.city || client.state ? (
+                            <span className="flex items-center gap-1 truncate max-w-[150px]">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              {[client.city, client.state].filter(Boolean).join(' - ')}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-6 text-center">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200">
+                            <Receipt className="w-3 h-3 text-slate-500" />
+                            {count}
+                          </span>
+                        </td>
+                        <td className="py-3.5 px-6 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleOpenEdit(client)}
+                              className="w-8 h-8 text-slate-500 hover:text-indigo-600 hover:bg-indigo-50"
+                              title="Editar cliente"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handleOpenDelete(client)}
+                              className="w-8 h-8 text-slate-500 hover:text-red-600 hover:bg-red-50"
+                              title="Excluir cliente"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Versão Mobile (Cards Empilhados <=640px) */}
+          <div className="sm:hidden space-y-3">
+            {filteredClients.map((client) => {
+              const count = chargeCountMap.get(client.id) || 0
+              return (
+                <Card key={client.id} className="rounded-xl border border-slate-200/80 shadow-xs">
+                  <CardContent className="p-4 space-y-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-center gap-3">
+                        <ClientAvatar name={client.name} size="md" />
+                        <div>
+                          <h4 className="font-semibold text-slate-900 text-sm">{client.name}</h4>
+                          <p className="text-xs text-slate-500">{client.email || 'Sem email'}</p>
+                        </div>
+                      </div>
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200">
+                        <Receipt className="w-3 h-3 text-slate-500" />
+                        {count}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-100">
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Documento</span>
+                        <span className="font-mono text-slate-700">
+                          {formatDocument(client.document)}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Telefone</span>
+                        <span className="text-slate-700">{formatPhone(client.phone)}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenEdit(client)}
+                        className="text-xs h-8 gap-1"
+                      >
+                        <Pencil className="w-3 h-3" />
+                        Editar
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleOpenDelete(client)}
+                        className="text-xs h-8 gap-1 text-red-600 border-red-200 hover:bg-red-50"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Excluir
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )
+            })}
+          </div>
+        </>
+      )}
+
+      {/* Modal de Criação / Edição */}
+      <Dialog open={isFormOpen} onOpenChange={(open) => !open && handleCloseForm()}>
+        <DialogContent className="sm:max-w-lg rounded-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold text-slate-900">
+              {editingClient ? 'Editar Cliente' : 'Novo Cliente'}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              {editingClient
+                ? 'Atualize as informações cadastrais do cliente.'
+                : 'Preencha os dados abaixo para cadastrar um novo cliente.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          {formError && (
+            <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmitForm} className="space-y-4 pt-2">
+            <div>
+              <Label htmlFor="c-name" className="text-xs font-semibold text-slate-700">
+                Nome completo <span className="text-red-500">*</span>
+              </Label>
+              <Input
+                id="c-name"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="Ex: Maria Oliveira ou Empresa XYZ"
+                className="mt-1 text-sm"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="c-email" className="text-xs font-semibold text-slate-700">
+                  Email
+                </Label>
+                <Input
+                  id="c-email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  placeholder="cliente@email.com"
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="c-document" className="text-xs font-semibold text-slate-700">
+                  Documento (CPF / CNPJ)
+                </Label>
+                <Input
+                  id="c-document"
+                  value={formData.document}
+                  onChange={(e) =>
+                    setFormData({ ...formData, document: formatDocument(e.target.value) })
+                  }
+                  placeholder="000.000.000-00 ou CNPJ"
+                  className="mt-1 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="c-phone" className="text-xs font-semibold text-slate-700">
+                  Telefone / WhatsApp
+                </Label>
+                <Input
+                  id="c-phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: formatPhone(e.target.value) })}
+                  placeholder="(11) 98765-4321"
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="c-address" className="text-xs font-semibold text-slate-700">
+                  Endereço
+                </Label>
+                <Input
+                  id="c-address"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  placeholder="Rua, número, complemento"
+                  className="mt-1 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="c-city" className="text-xs font-semibold text-slate-700">
+                  Cidade
+                </Label>
+                <Input
+                  id="c-city"
+                  value={formData.city}
+                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                  placeholder="Ex: São Paulo"
+                  className="mt-1 text-sm"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="c-state" className="text-xs font-semibold text-slate-700">
+                  Estado (UF)
+                </Label>
+                <Input
+                  id="c-state"
+                  value={formData.state}
+                  onChange={(e) =>
+                    setFormData({ ...formData, state: e.target.value.toUpperCase().slice(0, 2) })
+                  }
+                  placeholder="SP"
+                  maxLength={2}
+                  className="mt-1 text-sm uppercase"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-4 border-t border-slate-100 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={handleCloseForm}
+                disabled={formLoading}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                disabled={formLoading}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium"
+              >
+                {formLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    Salvando...
+                  </>
+                ) : editingClient ? (
+                  'Salvar alterações'
+                ) : (
+                  'Salvar'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal de Confirmação de Exclusão */}
+      <Dialog open={isDeleteOpen} onOpenChange={(open) => !open && handleCloseDelete()}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-2">
+              <AlertTriangle className="w-5 h-5" />
+            </div>
+            <DialogTitle className="text-base font-bold text-slate-900">
+              Excluir cliente?
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Tem certeza? Esta ação também excluirá as cobranças deste cliente.
+            </DialogDescription>
+          </DialogHeader>
+
+          {deletingClient && (
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
+              <p className="font-semibold text-slate-800">{deletingClient.name}</p>
+              <p className="text-slate-500">{deletingClient.email || 'Sem email'}</p>
+              <p className="text-red-600 font-medium pt-1">
+                {chargeCountMap.get(deletingClient.id) || 0} cobrança(s) vinculada(s)
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 pt-2">
+            <Button variant="outline" onClick={handleCloseDelete} disabled={formLoading}>
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmDelete}
+              disabled={formLoading}
+              className="bg-red-600 hover:bg-red-700 text-white"
+            >
+              {formLoading ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Excluindo...
+                </>
+              ) : (
+                'Excluir'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

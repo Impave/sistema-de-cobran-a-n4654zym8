@@ -1,0 +1,69 @@
+export type ChargeStatus = 'pending' | 'paid' | 'overdue' | 'cancelled'
+
+export interface UserProfile {
+  id: string
+  email: string
+  name?: string
+  avatar?: string
+  verified?: boolean
+  created?: string
+  updated?: string
+}
+
+export interface ClientRecord {
+  id: string
+  owner: string
+  name: string
+  email?: string
+  document?: string
+  phone?: string
+  address?: string
+  city?: string
+  state?: string
+  created: string
+  updated: string
+  // expand
+  expand?: {
+    owner?: UserProfile
+    'charges(client)'?: ChargeRecord[]
+  }
+  // client-side computed count
+  chargesCount?: number
+}
+
+export interface ChargeRecord {
+  id: string
+  owner: string
+  client: string
+  description: string
+  number: string
+  amount: number
+  due_date: string
+  paid_at?: string
+  status: ChargeStatus
+  created: string
+  updated: string
+  // expand
+  expand?: {
+    client?: ClientRecord
+    owner?: UserProfile
+  }
+}
+
+export interface ClientFormData {
+  name: string
+  email?: string
+  document?: string
+  phone?: string
+  address?: string
+  city?: string
+  state?: string
+}
+
+export interface ChargeFormData {
+  client: string
+  description: string
+  amount: number
+  due_date: string
+  status: ChargeStatus
+}

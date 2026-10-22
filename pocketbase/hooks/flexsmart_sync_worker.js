@@ -4,9 +4,24 @@
 // A importação para a collection clients acontece numa etapa posterior,
 // após confirmar o formato dos registros do ERP.
 cronAdd('flexsmart-sync-worker', '* * * * *', () => {
-  const pendentes = $app.findRecordsByFilter('flex_sync', "status = 'pending'", 'created', 1, 0)
+  const cutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString().replace('T', ' ')
+  const pendentes = $app.findRecordsByFilter(
+    'flex_sync',
+    "status = 'pending' || (status = 'running' && started_at < {:cutoff})",
+    'created',
+    1,
+    0,
+    { cutoff: cutoff },
+  )
   if (pendentes.length === 0) return
   const job = pendentes[0]
+  if (job.getString('status') === 'running') {
+    job.set('status', 'error')
+    job.set('error', 'Cancelada: ERP nao respondeu em 15 min')
+    job.set('finished_at', new DateTime().string())
+    $app.save(job)
+    return
+  }
 
   job.set('status', 'running')
   job.set('started_at', new DateTime().string())

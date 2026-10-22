@@ -13,6 +13,7 @@ routerAdd(
   'POST',
   '/backend/v1/flexsmart/sync',
   (e) => {
+    let lastStep = 'init'
     try {
       function extractTokenFromResponse(jsonBody, rawBody) {
         if (jsonBody && typeof jsonBody === 'object') {
@@ -56,6 +57,10 @@ routerAdd(
           }
         }
 
+        if (typeof jsonBody === 'string' && jsonBody.trim().length > 10) {
+          return jsonBody.trim()
+        }
+
         return null
       }
 
@@ -97,22 +102,83 @@ routerAdd(
 
         console.log('[FlexSmart] Realizando login em ' + base + '/login')
 
-        const res = $http.send({
-          url: base + '/login',
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            username: username,
-            password: password,
-          }),
-          timeout: 30,
-        })
+        let res
+        let lastLoginError = null
+
+        // Tentativa 1: FormData (conforme documentação do ERP FlexSmart)
+        try {
+          const fd = new FormData()
+          fd.append('username', username)
+          fd.append('password', password)
+          res = $http.send({
+            url: base + '/login',
+            method: 'POST',
+            body: fd,
+            headers: {
+              Accept: 'application/json',
+            },
+            timeout: 30,
+          })
+        } catch (eFd) {
+          lastLoginError = eFd
+        }
+
+        // Se falhou ou respondeu 4xx/5xx, tenta como application/x-www-form-urlencoded ou JSON
+        if (!res || res.statusCode < 200 || res.statusCode >= 300) {
+          try {
+            res = $http.send({
+              url: base + '/login',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'application/json',
+              },
+              body: JSON.stringify({
+                username: username,
+                password: password,
+              }),
+              timeout: 30,
+            })
+          } catch (eJson) {
+            lastLoginError = eJson
+          }
+        }
+
+        // Se ainda falhou ou não obteve sucesso, tenta x-www-form-urlencoded
+        if (!res || res.statusCode < 200 || res.statusCode >= 300) {
+          try {
+            res = $http.send({
+              url: base + '/login',
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                Accept: 'application/json',
+              },
+              body:
+                'username=' +
+                encodeURIComponent(username) +
+                '&password=' +
+                encodeURIComponent(password),
+              timeout: 30,
+            })
+          } catch (eUrl) {
+            lastLoginError = eUrl
+          }
+        }
+
+        if (!res) {
+          throw new Error(
+            'Falha de conexão ao tentar login no FlexSmart: ' +
+              (lastLoginError ? String(lastLoginError) : 'sem resposta'),
+          )
+        }
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw new Error('Falha no login FlexSmart: HTTP ' + res.statusCode)
+          const detail =
+            res.json && (res.json.message || res.json.error)
+              ? ': ' + (res.json.message || res.json.error)
+              : ''
+          throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
         }
 
         const token = extractTokenFromResponse(res.json, res.body)
@@ -147,21 +213,37 @@ routerAdd(
 
         console.log('[FlexSmart] Buscando clientes em ' + base + '/Cliente/getAll')
 
-        const res = $http.send({
-          url: base + '/Cliente/getAll',
-          method: 'GET',
-          headers: {
-            AuthToken: token,
-            Accept: 'application/json',
-          },
-          timeout: 300,
-        })
+        let res
+        let lastErr = null
+
+        // Tenta enviar com AuthToken
+        try {
+          res = $http.send({
+            url: base + '/Cliente/getAll',
+            method: 'GET',
+            headers: {
+              AuthToken: token,
+              Authorization: 'Bearer ' + token,
+              Accept: 'application/json',
+            },
+            timeout: 120,
+          })
+        } catch (eGet) {
+          lastErr = eGet
+        }
+
+        if (!res) {
+          throw new Error(
+            'Falha ao conectar no endpoint /Cliente/getAll do FlexSmart: ' +
+              (lastErr ? String(lastErr) : 'sem resposta'),
+          )
+        }
 
         if ((res.statusCode === 401 || res.statusCode === 403) && !forceRelogin) {
           console.log(
             '[FlexSmart] Resposta ' +
               res.statusCode +
-              ' recebida. Renovando token e tentando novamente...',
+              ' recebida em /Cliente/getAll. Renovando token e tentando novamente...',
           )
           try {
             if ($app.store) {
@@ -173,10 +255,18 @@ routerAdd(
         }
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw new Error('Falha ao buscar clientes no FlexSmart: HTTP ' + res.statusCode)
+          throw new Error('Falha ao buscar clientes no ERP FlexSmart: HTTP ' + res.statusCode)
         }
 
-        const dados = res.json
+        let dados = res.json
+
+        // Se res.json não foi parseado automaticamente mas veio string no body
+        if (!dados && res.raw) {
+          try {
+            dados = JSON.parse(res.raw)
+          } catch (_) {}
+        }
+
         if (Array.isArray(dados)) {
           return dados
         }
@@ -186,25 +276,45 @@ routerAdd(
             'clientes',
             'clients',
             'data',
+            'dados',
             'content',
             'items',
             'resultado',
+            'results',
+            'result',
             'lista',
+            'list',
             'records',
+            'rows',
+            'elements',
           ]
           for (const key of candidateKeys) {
             if (Array.isArray(dados[key])) {
               return dados[key]
             }
           }
+          // Se houver qualquer propriedade que seja array
           for (const k of Object.keys(dados)) {
             if (Array.isArray(dados[k])) {
               return dados[k]
             }
           }
+          // Se vier um único objeto cliente em vez de array
+          if (
+            dados.id ||
+            dados.codigo ||
+            dados.nome ||
+            dados.razaoSocial ||
+            dados.cnpj ||
+            dados.cpf
+          ) {
+            return [dados]
+          }
         }
 
-        throw new Error('Resposta de /Cliente/getAll não continha uma lista de clientes válida')
+        throw new Error(
+          'Resposta de /Cliente/getAll não continha uma lista de clientes válida (formato inesperado do ERP)',
+        )
       }
 
       function pickFirst(obj, keys) {
@@ -224,6 +334,7 @@ routerAdd(
       }
 
       console.log('[FlexSmart] Iniciando sincronização manual via API...')
+      lastStep = 'find_user'
 
       let ownerId = null
       try {
@@ -231,10 +342,12 @@ routerAdd(
         ownerId = user.id
       } catch (e2) {
         throw new Error(
-          'Usuário de demonstração daniel@impave.com.br não encontrado no banco de dados.',
+          'Usuário de demonstração daniel@impave.com.br não encontrado no banco de dados: ' +
+            String(e2),
         )
       }
 
+      lastStep = 'fetch_erp'
       const erpList = fetchClientesFromERP(false)
       console.log('[FlexSmart] Total de clientes retornados pelo ERP: ' + erpList.length)
 
@@ -275,6 +388,7 @@ routerAdd(
         }
 
         try {
+          // Suporte a campos aninhados ou variações comuns
           const erpCode = pickFirst(item, [
             'id',
             'codigo',
@@ -284,6 +398,8 @@ routerAdd(
             'cod_cliente',
             'id_cliente',
             'codigoCliente',
+            'cd_cliente',
+            'cdCliente',
           ])
 
           const docRaw = pickFirst(item, [
@@ -299,6 +415,8 @@ routerAdd(
             'nrCnpj',
             'nr_cnpj',
             'nrCpfCnpj',
+            'nr_documento',
+            'nrDocumento',
           ])
           const docClean = cleanDigits(docRaw)
 
@@ -306,16 +424,27 @@ routerAdd(
             'nome',
             'razaoSocial',
             'razao_social',
+            'razao',
             'name',
             'nomeCliente',
             'nome_fantasia',
+            'nomeFantasia',
             'fantasia',
             'descricao',
             'dsNome',
             'nmCliente',
+            'nm_cliente',
+            'ds_nome',
           ])
 
-          const emailRaw = pickFirst(item, ['email', 'e_mail', 'dsEmail', 'emailCliente'])
+          const emailRaw = pickFirst(item, [
+            'email',
+            'e_mail',
+            'dsEmail',
+            'emailCliente',
+            'ds_email',
+            'mail',
+          ])
           const phoneRaw = pickFirst(item, [
             'telefone',
             'fone',
@@ -323,8 +452,11 @@ routerAdd(
             'celular',
             'tel',
             'telefone1',
+            'telefone_1',
             'nrTelefone',
             'dsTelefone',
+            'nr_telefone',
+            'ds_telefone',
           ])
           const addressRaw = pickFirst(item, [
             'endereco',
@@ -333,9 +465,28 @@ routerAdd(
             'rua',
             'dsEndereco',
             'nmLogradouro',
+            'ds_endereco',
+            'logradouro_nome',
           ])
-          const cityRaw = pickFirst(item, ['cidade', 'city', 'municipio', 'dsCidade', 'nmCidade'])
-          const stateRaw = pickFirst(item, ['uf', 'estado', 'state', 'siglaUf', 'dsUf', 'sgUf'])
+          const cityRaw = pickFirst(item, [
+            'cidade',
+            'city',
+            'municipio',
+            'dsCidade',
+            'nmCidade',
+            'ds_cidade',
+            'nm_municipio',
+          ])
+          const stateRaw = pickFirst(item, [
+            'uf',
+            'estado',
+            'state',
+            'siglaUf',
+            'dsUf',
+            'sgUf',
+            'ds_uf',
+            'sg_uf',
+          ])
 
           let name = nameRaw
           if (!name || name.trim().length < 2) {
@@ -425,9 +576,11 @@ routerAdd(
       return e.json(200, summary)
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
-      console.log('[FlexSmart] Falha na sincronização manual: ' + msg)
-      return e.json(500, {
+      console.log('[FlexSmart] Falha na sincronização manual (passo ' + lastStep + '): ' + msg)
+      return e.json(400, {
         error: msg,
+        message: msg,
+        step: lastStep,
         success: false,
       })
     }
@@ -436,6 +589,7 @@ routerAdd(
 )
 
 // Cron job diário às 03:00 UTC (0 3 * * *)
+
 cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
   try {
     function extractTokenFromResponse(jsonBody, rawBody) {
@@ -480,6 +634,10 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
         }
       }
 
+      if (typeof jsonBody === 'string' && jsonBody.trim().length > 10) {
+        return jsonBody.trim()
+      }
+
       return null
     }
 
@@ -521,22 +679,83 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
 
       console.log('[FlexSmart] Realizando login no cron em ' + base + '/login')
 
-      const res = $http.send({
-        url: base + '/login',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-        body: JSON.stringify({
-          username: username,
-          password: password,
-        }),
-        timeout: 30,
-      })
+      let res
+      let lastLoginError = null
+
+      // Tentativa 1: FormData
+      try {
+        const fd = new FormData()
+        fd.append('username', username)
+        fd.append('password', password)
+        res = $http.send({
+          url: base + '/login',
+          method: 'POST',
+          body: fd,
+          headers: {
+            Accept: 'application/json',
+          },
+          timeout: 30,
+        })
+      } catch (eFd) {
+        lastLoginError = eFd
+      }
+
+      // Tentativa 2: JSON
+      if (!res || res.statusCode < 200 || res.statusCode >= 300) {
+        try {
+          res = $http.send({
+            url: base + '/login',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              username: username,
+              password: password,
+            }),
+            timeout: 30,
+          })
+        } catch (eJson) {
+          lastLoginError = eJson
+        }
+      }
+
+      // Tentativa 3: x-www-form-urlencoded
+      if (!res || res.statusCode < 200 || res.statusCode >= 300) {
+        try {
+          res = $http.send({
+            url: base + '/login',
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Accept: 'application/json',
+            },
+            body:
+              'username=' +
+              encodeURIComponent(username) +
+              '&password=' +
+              encodeURIComponent(password),
+            timeout: 30,
+          })
+        } catch (eUrl) {
+          lastLoginError = eUrl
+        }
+      }
+
+      if (!res) {
+        throw new Error(
+          'Falha de conexão ao tentar login no FlexSmart (cron): ' +
+            (lastLoginError ? String(lastLoginError) : 'sem resposta'),
+        )
+      }
 
       if (res.statusCode < 200 || res.statusCode >= 300) {
-        throw new Error('Falha no login FlexSmart (cron): HTTP ' + res.statusCode)
+        const detail =
+          res.json && (res.json.message || res.json.error)
+            ? ': ' + (res.json.message || res.json.error)
+            : ''
+        throw new Error('Falha no login FlexSmart (cron): HTTP ' + res.statusCode + detail)
       }
 
       const token = extractTokenFromResponse(res.json, res.body)
@@ -564,15 +783,30 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
 
       console.log('[FlexSmart] Cron buscando clientes em ' + base + '/Cliente/getAll')
 
-      const res = $http.send({
-        url: base + '/Cliente/getAll',
-        method: 'GET',
-        headers: {
-          AuthToken: token,
-          Accept: 'application/json',
-        },
-        timeout: 300,
-      })
+      let res
+      let lastErr = null
+
+      try {
+        res = $http.send({
+          url: base + '/Cliente/getAll',
+          method: 'GET',
+          headers: {
+            AuthToken: token,
+            Authorization: 'Bearer ' + token,
+            Accept: 'application/json',
+          },
+          timeout: 120,
+        })
+      } catch (eGet) {
+        lastErr = eGet
+      }
+
+      if (!res) {
+        throw new Error(
+          'Falha ao conectar no endpoint /Cliente/getAll do FlexSmart (cron): ' +
+            (lastErr ? String(lastErr) : 'sem resposta'),
+        )
+      }
 
       if ((res.statusCode === 401 || res.statusCode === 403) && !forceRelogin) {
         console.log(
@@ -593,7 +827,14 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
         throw new Error('Falha ao buscar clientes no FlexSmart (cron): HTTP ' + res.statusCode)
       }
 
-      const dados = res.json
+      let dados = res.json
+
+      if (!dados && res.raw) {
+        try {
+          dados = JSON.parse(res.raw)
+        } catch (_) {}
+      }
+
       if (Array.isArray(dados)) {
         return dados
       }
@@ -603,11 +844,17 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           'clientes',
           'clients',
           'data',
+          'dados',
           'content',
           'items',
           'resultado',
+          'results',
+          'result',
           'lista',
+          'list',
           'records',
+          'rows',
+          'elements',
         ]
         for (const key of candidateKeys) {
           if (Array.isArray(dados[key])) {
@@ -619,9 +866,21 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
             return dados[k]
           }
         }
+        if (
+          dados.id ||
+          dados.codigo ||
+          dados.nome ||
+          dados.razaoSocial ||
+          dados.cnpj ||
+          dados.cpf
+        ) {
+          return [dados]
+        }
       }
 
-      throw new Error('Resposta de /Cliente/getAll não continha uma lista de clientes válida')
+      throw new Error(
+        'Resposta de /Cliente/getAll não continha uma lista de clientes válida (cron)',
+      )
     }
 
     function pickFirst(obj, keys) {
@@ -700,6 +959,8 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           'cod_cliente',
           'id_cliente',
           'codigoCliente',
+          'cd_cliente',
+          'cdCliente',
         ])
 
         const docRaw = pickFirst(item, [
@@ -715,6 +976,8 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           'nrCnpj',
           'nr_cnpj',
           'nrCpfCnpj',
+          'nr_documento',
+          'nrDocumento',
         ])
         const docClean = cleanDigits(docRaw)
 
@@ -722,16 +985,27 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           'nome',
           'razaoSocial',
           'razao_social',
+          'razao',
           'name',
           'nomeCliente',
           'nome_fantasia',
+          'nomeFantasia',
           'fantasia',
           'descricao',
           'dsNome',
           'nmCliente',
+          'nm_cliente',
+          'ds_nome',
         ])
 
-        const emailRaw = pickFirst(item, ['email', 'e_mail', 'dsEmail', 'emailCliente'])
+        const emailRaw = pickFirst(item, [
+          'email',
+          'e_mail',
+          'dsEmail',
+          'emailCliente',
+          'ds_email',
+          'mail',
+        ])
         const phoneRaw = pickFirst(item, [
           'telefone',
           'fone',
@@ -739,8 +1013,11 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           'celular',
           'tel',
           'telefone1',
+          'telefone_1',
           'nrTelefone',
           'dsTelefone',
+          'nr_telefone',
+          'ds_telefone',
         ])
         const addressRaw = pickFirst(item, [
           'endereco',
@@ -749,9 +1026,28 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           'rua',
           'dsEndereco',
           'nmLogradouro',
+          'ds_endereco',
+          'logradouro_nome',
         ])
-        const cityRaw = pickFirst(item, ['cidade', 'city', 'municipio', 'dsCidade', 'nmCidade'])
-        const stateRaw = pickFirst(item, ['uf', 'estado', 'state', 'siglaUf', 'dsUf', 'sgUf'])
+        const cityRaw = pickFirst(item, [
+          'cidade',
+          'city',
+          'municipio',
+          'dsCidade',
+          'nmCidade',
+          'ds_cidade',
+          'nm_municipio',
+        ])
+        const stateRaw = pickFirst(item, [
+          'uf',
+          'estado',
+          'state',
+          'siglaUf',
+          'dsUf',
+          'sgUf',
+          'ds_uf',
+          'sg_uf',
+        ])
 
         let name = nameRaw
         if (!name || name.trim().length < 2) {

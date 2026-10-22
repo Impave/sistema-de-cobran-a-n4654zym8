@@ -35,6 +35,7 @@ import { useRealtime } from '@/hooks/use-realtime'
 import { useToast } from '@/hooks/use-toast'
 import type { ClientRecord, ClientFormData, ChargeRecord } from '@/types'
 import { formatDocument, formatPhone } from '@/lib/formatters'
+import { getErrorMessage } from '@/lib/pocketbase/errors'
 
 export default function ClientsPage() {
   const [clients, setClients] = useState<ClientRecord[]>([])
@@ -260,11 +261,10 @@ export default function ClientsPage() {
       })
       await loadData()
     } catch (err: unknown) {
-      const msg =
-        err instanceof Error ? err.message : 'Não foi possível sincronizar com o ERP FlexSmart.'
+      const msg = getErrorMessage(err)
       toast({
         title: 'Falha na sincronização com FlexSmart',
-        description: msg,
+        description: msg || 'Não foi possível sincronizar com o ERP FlexSmart.',
         variant: 'destructive',
       })
     } finally {

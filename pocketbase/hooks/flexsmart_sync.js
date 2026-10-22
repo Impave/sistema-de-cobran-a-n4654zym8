@@ -17,25 +17,40 @@ routerAdd(
     try {
       function extractTokenFromResponse(jsonBody, rawBody) {
         if (jsonBody && typeof jsonBody === 'object') {
-          if (typeof jsonBody.token === 'string' && jsonBody.token.trim())
-            return jsonBody.token.trim()
-          if (typeof jsonBody.authToken === 'string' && jsonBody.authToken.trim())
-            return jsonBody.authToken.trim()
-          if (typeof jsonBody.AuthToken === 'string' && jsonBody.AuthToken.trim())
-            return jsonBody.AuthToken.trim()
-          if (typeof jsonBody.access_token === 'string' && jsonBody.access_token.trim())
-            return jsonBody.access_token.trim()
-          if (typeof jsonBody.accessToken === 'string' && jsonBody.accessToken.trim())
-            return jsonBody.accessToken.trim()
-          if (typeof jsonBody.jwt === 'string' && jsonBody.jwt.trim()) return jsonBody.jwt.trim()
-          if (typeof jsonBody.id_token === 'string' && jsonBody.id_token.trim())
-            return jsonBody.id_token.trim()
-          if (typeof jsonBody.data === 'string' && jsonBody.data.trim()) return jsonBody.data.trim()
+          // 1. Prioridade máxima: access_token (validado via Postman)
+          if (typeof jsonBody.access_token === 'string' && jsonBody.access_token.trim()) {
+            return { token: jsonBody.access_token.trim(), field: 'access_token' }
+          }
+          // Fallbacks: client_id, token, authToken, AuthToken, accessToken, jwt, id_token, data
+          if (typeof jsonBody.client_id === 'string' && jsonBody.client_id.trim()) {
+            return { token: jsonBody.client_id.trim(), field: 'client_id' }
+          }
+          if (typeof jsonBody.token === 'string' && jsonBody.token.trim()) {
+            return { token: jsonBody.token.trim(), field: 'token' }
+          }
+          if (typeof jsonBody.authToken === 'string' && jsonBody.authToken.trim()) {
+            return { token: jsonBody.authToken.trim(), field: 'authToken' }
+          }
+          if (typeof jsonBody.AuthToken === 'string' && jsonBody.AuthToken.trim()) {
+            return { token: jsonBody.AuthToken.trim(), field: 'AuthToken' }
+          }
+          if (typeof jsonBody.accessToken === 'string' && jsonBody.accessToken.trim()) {
+            return { token: jsonBody.accessToken.trim(), field: 'accessToken' }
+          }
+          if (typeof jsonBody.jwt === 'string' && jsonBody.jwt.trim()) {
+            return { token: jsonBody.jwt.trim(), field: 'jwt' }
+          }
+          if (typeof jsonBody.id_token === 'string' && jsonBody.id_token.trim()) {
+            return { token: jsonBody.id_token.trim(), field: 'id_token' }
+          }
+          if (typeof jsonBody.data === 'string' && jsonBody.data.trim()) {
+            return { token: jsonBody.data.trim(), field: 'data' }
+          }
 
           const nested = jsonBody.data || jsonBody.result || jsonBody.response
           if (nested && typeof nested === 'object') {
-            const nestedToken = extractTokenFromResponse(nested, null)
-            if (nestedToken) return nestedToken
+            const nestedRes = extractTokenFromResponse(nested, null)
+            if (nestedRes) return { token: nestedRes.token, field: 'nested.' + nestedRes.field }
           }
         }
 
@@ -53,12 +68,12 @@ routerAdd(
             str = str.slice(1, -1)
           }
           if (str.length > 10 && !str.startsWith('<') && !str.startsWith('{')) {
-            return str
+            return { token: str, field: 'rawBody' }
           }
         }
 
         if (typeof jsonBody === 'string' && jsonBody.trim().length > 10) {
-          return jsonBody.trim()
+          return { token: jsonBody.trim(), field: 'stringJsonBody' }
         }
 
         return null
@@ -105,46 +120,46 @@ routerAdd(
         let res
         let lastLoginError = null
 
-        // Tentativa 1: FormData (conforme documentação do ERP FlexSmart)
+        // Tentativa 1: POST application/json com body raw JSON (formato validado no Postman)
         try {
-          const fd = new FormData()
-          fd.append('username', username)
-          fd.append('password', password)
           res = $http.send({
             url: base + '/login',
             method: 'POST',
-            body: fd,
             headers: {
+              'Content-Type': 'application/json',
               Accept: 'application/json',
             },
+            body: JSON.stringify({
+              username: username,
+              password: password,
+            }),
             timeout: 30,
           })
-        } catch (eFd) {
-          lastLoginError = eFd
+        } catch (eJson) {
+          lastLoginError = eJson
         }
 
-        // Se falhou ou respondeu 4xx/5xx, tenta como application/x-www-form-urlencoded ou JSON
+        // Tentativa 2 (fallback): FormData
         if (!res || res.statusCode < 200 || res.statusCode >= 300) {
           try {
+            const fd = new FormData()
+            fd.append('username', username)
+            fd.append('password', password)
             res = $http.send({
               url: base + '/login',
               method: 'POST',
+              body: fd,
               headers: {
-                'Content-Type': 'application/json',
                 Accept: 'application/json',
               },
-              body: JSON.stringify({
-                username: username,
-                password: password,
-              }),
               timeout: 30,
             })
-          } catch (eJson) {
-            lastLoginError = eJson
+          } catch (eFd) {
+            lastLoginError = eFd
           }
         }
 
-        // Se ainda falhou ou não obteve sucesso, tenta x-www-form-urlencoded
+        // Tentativa 3 (fallback): application/x-www-form-urlencoded
         if (!res || res.statusCode < 200 || res.statusCode >= 300) {
           try {
             res = $http.send({
@@ -173,6 +188,13 @@ routerAdd(
           )
         }
 
+        // Log das chaves presentes na resposta do login
+        const keysList =
+          res.json && typeof res.json === 'object' ? Object.keys(res.json).join(', ') : 'sem json'
+        console.log(
+          '[FlexSmart] Resposta do login (HTTP ' + res.statusCode + ') chaves: [' + keysList + ']',
+        )
+
         if (res.statusCode < 200 || res.statusCode >= 300) {
           const detail =
             res.json && (res.json.message || res.json.error)
@@ -181,16 +203,23 @@ routerAdd(
           throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
         }
 
-        const token = extractTokenFromResponse(res.json, res.body)
-        if (!token) {
+        const extracted = extractTokenFromResponse(res.json, res.body)
+        if (!extracted || !extracted.token) {
           console.log(
             '[FlexSmart] Login retornou status ' +
               res.statusCode +
-              ' mas formato do token não foi reconhecido. Chaves: ' +
-              (res.json ? Object.keys(res.json).join(',') : 'sem json'),
+              ' mas formato do token não foi reconhecido. Chaves: [' +
+              keysList +
+              ']',
           )
           throw new Error('Token de autenticação não encontrado na resposta de login do FlexSmart')
         }
+
+        const token = extracted.token
+        const tokenField = extracted.field || 'desconhecido'
+        const prefix = token.length >= 8 ? token.slice(0, 8) + '...' : token
+
+        console.log('[FlexSmart] Token obtido (campo: ' + tokenField + ', prefixo: ' + prefix + ')')
 
         try {
           if ($app.store) {
@@ -199,7 +228,6 @@ routerAdd(
           }
         } catch (_) {}
 
-        console.log('[FlexSmart] Token obtido com sucesso')
         return token
       }
 
@@ -594,25 +622,40 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
   try {
     function extractTokenFromResponse(jsonBody, rawBody) {
       if (jsonBody && typeof jsonBody === 'object') {
-        if (typeof jsonBody.token === 'string' && jsonBody.token.trim())
-          return jsonBody.token.trim()
-        if (typeof jsonBody.authToken === 'string' && jsonBody.authToken.trim())
-          return jsonBody.authToken.trim()
-        if (typeof jsonBody.AuthToken === 'string' && jsonBody.AuthToken.trim())
-          return jsonBody.AuthToken.trim()
-        if (typeof jsonBody.access_token === 'string' && jsonBody.access_token.trim())
-          return jsonBody.access_token.trim()
-        if (typeof jsonBody.accessToken === 'string' && jsonBody.accessToken.trim())
-          return jsonBody.accessToken.trim()
-        if (typeof jsonBody.jwt === 'string' && jsonBody.jwt.trim()) return jsonBody.jwt.trim()
-        if (typeof jsonBody.id_token === 'string' && jsonBody.id_token.trim())
-          return jsonBody.id_token.trim()
-        if (typeof jsonBody.data === 'string' && jsonBody.data.trim()) return jsonBody.data.trim()
+        // 1. Prioridade máxima: access_token (validado via Postman)
+        if (typeof jsonBody.access_token === 'string' && jsonBody.access_token.trim()) {
+          return { token: jsonBody.access_token.trim(), field: 'access_token' }
+        }
+        // Fallbacks: client_id, token, authToken, AuthToken, accessToken, jwt, id_token, data
+        if (typeof jsonBody.client_id === 'string' && jsonBody.client_id.trim()) {
+          return { token: jsonBody.client_id.trim(), field: 'client_id' }
+        }
+        if (typeof jsonBody.token === 'string' && jsonBody.token.trim()) {
+          return { token: jsonBody.token.trim(), field: 'token' }
+        }
+        if (typeof jsonBody.authToken === 'string' && jsonBody.authToken.trim()) {
+          return { token: jsonBody.authToken.trim(), field: 'authToken' }
+        }
+        if (typeof jsonBody.AuthToken === 'string' && jsonBody.AuthToken.trim()) {
+          return { token: jsonBody.AuthToken.trim(), field: 'AuthToken' }
+        }
+        if (typeof jsonBody.accessToken === 'string' && jsonBody.accessToken.trim()) {
+          return { token: jsonBody.accessToken.trim(), field: 'accessToken' }
+        }
+        if (typeof jsonBody.jwt === 'string' && jsonBody.jwt.trim()) {
+          return { token: jsonBody.jwt.trim(), field: 'jwt' }
+        }
+        if (typeof jsonBody.id_token === 'string' && jsonBody.id_token.trim()) {
+          return { token: jsonBody.id_token.trim(), field: 'id_token' }
+        }
+        if (typeof jsonBody.data === 'string' && jsonBody.data.trim()) {
+          return { token: jsonBody.data.trim(), field: 'data' }
+        }
 
         const nested = jsonBody.data || jsonBody.result || jsonBody.response
         if (nested && typeof nested === 'object') {
-          const nestedToken = extractTokenFromResponse(nested, null)
-          if (nestedToken) return nestedToken
+          const nestedRes = extractTokenFromResponse(nested, null)
+          if (nestedRes) return { token: nestedRes.token, field: 'nested.' + nestedRes.field }
         }
       }
 
@@ -630,12 +673,12 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
           str = str.slice(1, -1)
         }
         if (str.length > 10 && !str.startsWith('<') && !str.startsWith('{')) {
-          return str
+          return { token: str, field: 'rawBody' }
         }
       }
 
       if (typeof jsonBody === 'string' && jsonBody.trim().length > 10) {
-        return jsonBody.trim()
+        return { token: jsonBody.trim(), field: 'stringJsonBody' }
       }
 
       return null
@@ -682,46 +725,46 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
       let res
       let lastLoginError = null
 
-      // Tentativa 1: FormData
+      // Tentativa 1: POST application/json com body raw JSON (formato validado no Postman)
       try {
-        const fd = new FormData()
-        fd.append('username', username)
-        fd.append('password', password)
         res = $http.send({
           url: base + '/login',
           method: 'POST',
-          body: fd,
           headers: {
+            'Content-Type': 'application/json',
             Accept: 'application/json',
           },
+          body: JSON.stringify({
+            username: username,
+            password: password,
+          }),
           timeout: 30,
         })
-      } catch (eFd) {
-        lastLoginError = eFd
+      } catch (eJson) {
+        lastLoginError = eJson
       }
 
-      // Tentativa 2: JSON
+      // Tentativa 2 (fallback): FormData
       if (!res || res.statusCode < 200 || res.statusCode >= 300) {
         try {
+          const fd = new FormData()
+          fd.append('username', username)
+          fd.append('password', password)
           res = $http.send({
             url: base + '/login',
             method: 'POST',
+            body: fd,
             headers: {
-              'Content-Type': 'application/json',
               Accept: 'application/json',
             },
-            body: JSON.stringify({
-              username: username,
-              password: password,
-            }),
             timeout: 30,
           })
-        } catch (eJson) {
-          lastLoginError = eJson
+        } catch (eFd) {
+          lastLoginError = eFd
         }
       }
 
-      // Tentativa 3: x-www-form-urlencoded
+      // Tentativa 3 (fallback): application/x-www-form-urlencoded
       if (!res || res.statusCode < 200 || res.statusCode >= 300) {
         try {
           res = $http.send({
@@ -750,6 +793,16 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
         )
       }
 
+      const keysList =
+        res.json && typeof res.json === 'object' ? Object.keys(res.json).join(', ') : 'sem json'
+      console.log(
+        '[FlexSmart] Cron resposta do login (HTTP ' +
+          res.statusCode +
+          ') chaves: [' +
+          keysList +
+          ']',
+      )
+
       if (res.statusCode < 200 || res.statusCode >= 300) {
         const detail =
           res.json && (res.json.message || res.json.error)
@@ -758,10 +811,25 @@ cronAdd('flexsmart-sync-daily', '0 3 * * *', () => {
         throw new Error('Falha no login FlexSmart (cron): HTTP ' + res.statusCode + detail)
       }
 
-      const token = extractTokenFromResponse(res.json, res.body)
-      if (!token) {
+      const extracted = extractTokenFromResponse(res.json, res.body)
+      if (!extracted || !extracted.token) {
+        console.log(
+          '[FlexSmart] Cron: login retornou status ' +
+            res.statusCode +
+            ' mas formato do token não foi reconhecido. Chaves: [' +
+            keysList +
+            ']',
+        )
         throw new Error('Token de autenticação não encontrado na resposta de login do FlexSmart')
       }
+
+      const token = extracted.token
+      const tokenField = extracted.field || 'desconhecido'
+      const prefix = token.length >= 8 ? token.slice(0, 8) + '...' : token
+
+      console.log(
+        '[FlexSmart] Cron token obtido (campo: ' + tokenField + ', prefixo: ' + prefix + ')',
+      )
 
       try {
         if ($app.store) {

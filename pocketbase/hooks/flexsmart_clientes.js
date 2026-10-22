@@ -38,7 +38,7 @@ routerAdd(
         url: base + '/Cliente/getAll',
         method: 'GET',
         headers: { AuthToken: token },
-        timeout: 60,
+        timeout: 120,
       })
     } catch (err) {
       $app.logger().error('flexsmart: falha de transporte no getAll', 'erro', String(err))

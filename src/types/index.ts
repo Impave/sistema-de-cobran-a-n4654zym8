@@ -20,6 +20,7 @@ export interface ClientRecord {
   address?: string
   city?: string
   state?: string
+  erp_code?: string
   created: string
   updated: string
   // expand
@@ -29,6 +30,14 @@ export interface ClientRecord {
   }
   // client-side computed count
   chargesCount?: number
+}
+
+export interface FlexSmartSyncResult {
+  totalErp: number
+  created: number
+  updated: number
+  errors: number
+  success: boolean
 }
 
 export interface ChargeRecord {
@@ -58,6 +67,7 @@ export interface ClientFormData {
   address?: string
   city?: string
   state?: string
+  erp_code?: string
 }
 
 export interface ChargeFormData {

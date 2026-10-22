@@ -1,5 +1,5 @@
 import pb from '@/lib/pocketbase/client'
-import type { ClientRecord, ClientFormData } from '@/types'
+import type { ClientRecord, ClientFormData, FlexSmartSyncResult } from '@/types'
 
 export const clientsService = {
   async getAll(): Promise<ClientRecord[]> {
@@ -45,5 +45,12 @@ export const clientsService = {
 
   async delete(id: string): Promise<boolean> {
     return await pb.collection('clients').delete(id)
+  },
+
+  async syncFlexSmart(): Promise<FlexSmartSyncResult> {
+    return await pb.send<FlexSmartSyncResult>('/backend/v1/flexsmart/sync', {
+      method: 'POST',
+      requestKey: null,
+    })
   },
 }

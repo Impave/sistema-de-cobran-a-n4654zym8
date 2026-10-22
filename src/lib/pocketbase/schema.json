@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-22T20:29:28.376Z",
+  "generatedAt": "2026-10-22T20:44:12.681Z",
   "collections": [
     {
       "name": "users",
@@ -117,11 +117,18 @@
           "required": false,
           "system": false,
           "autodateTriggers": ["onCreate", "onUpdate"]
+        },
+        {
+          "name": "erp_code",
+          "type": "text",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
         "CREATE INDEX idx_clients_owner ON clients (owner)",
-        "CREATE INDEX idx_clients_created ON clients (created)"
+        "CREATE INDEX idx_clients_created ON clients (created)",
+        "CREATE INDEX `idx_clients_erp_code` ON `clients` (erp_code)"
       ]
     },
     {

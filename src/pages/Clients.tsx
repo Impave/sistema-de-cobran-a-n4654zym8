@@ -12,7 +12,10 @@ import {
   MapPin,
   Loader2,
   AlertTriangle,
+  RefreshCw,
+  Building2,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -59,6 +62,7 @@ export default function ClientsPage() {
   })
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+  const [syncLoading, setSyncLoading] = useState(false)
 
   const { toast } = useToast()
 
@@ -245,6 +249,29 @@ export default function ClientsPage() {
     }
   }
 
+  // Sincronização com o ERP FlexSmart
+  const handleSyncFlexSmart = async () => {
+    setSyncLoading(true)
+    try {
+      const result = await clientsService.syncFlexSmart()
+      toast({
+        title: 'Sincronização concluída',
+        description: `${result.created} novos clientes importados, ${result.updated} atualizados (${result.totalErp} no ERP FlexSmart).`,
+      })
+      await loadData()
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error ? err.message : 'Não foi possível sincronizar com o ERP FlexSmart.'
+      toast({
+        title: 'Falha na sincronização com FlexSmart',
+        description: msg,
+        variant: 'destructive',
+      })
+    } finally {
+      setSyncLoading(false)
+    }
+  }
+
   // Filtro de busca por nome, email ou documento
   const filteredClients = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -269,13 +296,36 @@ export default function ClientsPage() {
             Gerencie sua carteira de clientes, dados cadastrais e histórico de cobranças
           </p>
         </div>
-        <Button
-          onClick={handleOpenCreate}
-          className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-xs"
-        >
-          <Plus className="w-4 h-4 mr-1.5" />
-          Novo Cliente
-        </Button>
+        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleSyncFlexSmart}
+            disabled={syncLoading || loading}
+            className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium shadow-xs"
+            title="Sincronizar cadastros de clientes a partir do ERP FlexSmart"
+          >
+            {syncLoading ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
+                Importando do ERP...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4 mr-1.5 text-indigo-600" />
+                Importar do ERP FlexSmart
+              </>
+            )}
+          </Button>
+
+          <Button
+            onClick={handleOpenCreate}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium shadow-xs"
+          >
+            <Plus className="w-4 h-4 mr-1.5" />
+            Novo Cliente
+          </Button>
+        </div>
       </div>
 
       {/* Barra de Busca */}
@@ -370,9 +420,21 @@ export default function ClientsPage() {
                           <div className="flex items-center gap-3">
                             <ClientAvatar name={client.name} size="md" />
                             <div className="min-w-0">
-                              <p className="font-semibold text-slate-900 text-sm truncate">
-                                {client.name}
-                              </p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-semibold text-slate-900 text-sm truncate">
+                                  {client.name}
+                                </p>
+                                {client.erp_code && (
+                                  <Badge
+                                    variant="outline"
+                                    className="bg-indigo-50/70 text-indigo-700 border-indigo-200/80 text-[10px] px-1.5 py-0 h-4 font-semibold tracking-wide shrink-0 inline-flex items-center gap-0.5"
+                                    title={`Cliente sincronizado via FlexSmart ERP (Cód: ${client.erp_code})`}
+                                  >
+                                    <Building2 className="w-2.5 h-2.5 text-indigo-500" />
+                                    ERP
+                                  </Badge>
+                                )}
+                              </div>
                               {client.email ? (
                                 <p className="text-slate-500 text-xs truncate flex items-center gap-1 mt-0.5">
                                   <Mail className="w-3 h-3 text-slate-400 inline shrink-0" />
@@ -456,7 +518,19 @@ export default function ClientsPage() {
                       <div className="flex items-center gap-3">
                         <ClientAvatar name={client.name} size="md" />
                         <div>
-                          <h4 className="font-semibold text-slate-900 text-sm">{client.name}</h4>
+                          <div className="flex items-center gap-1.5">
+                            <h4 className="font-semibold text-slate-900 text-sm">{client.name}</h4>
+                            {client.erp_code && (
+                              <Badge
+                                variant="outline"
+                                className="bg-indigo-50/70 text-indigo-700 border-indigo-200/80 text-[10px] px-1.5 py-0 h-4 font-semibold tracking-wide shrink-0 inline-flex items-center gap-0.5"
+                                title={`Cliente sincronizado via FlexSmart ERP (Cód: ${client.erp_code})`}
+                              >
+                                <Building2 className="w-2.5 h-2.5 text-indigo-500" />
+                                ERP
+                              </Badge>
+                            )}
+                          </div>
                           <p className="text-xs text-slate-500">{client.email || 'Sem email'}</p>
                         </div>
                       </div>

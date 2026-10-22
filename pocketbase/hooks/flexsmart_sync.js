@@ -6,7 +6,18 @@
 // 5. Rota POST /backend/v1/flexsmart/sync (requer autenticação PocketBase)
 //
 // NOTA: Sincronização estritamente MANUAL a pedido do usuário (sem cron / sem execução automática).
-// Executada somente quando o usuário clica em "Importar do ERP FlexSmart" na interface.
+// A integração com a API da FlexSmart NÃO deve rodar de forma automática sob nenhuma hipótese.
+// Executada exclusivamente quando o usuário clica em "Importar do ERP FlexSmart" na interface.
+
+// Garantir idempotentemente a remoção de qualquer resquício de cron job agendado de sincronização do FlexSmart
+try {
+  if (typeof cronRemove === 'function') {
+    cronRemove('flexsmart-sync-daily')
+    cronRemove('flexsmart_sync_daily')
+    cronRemove('flexsmart-sync')
+    cronRemove('flexsmart_sync')
+  }
+} catch (_) {}
 
 // Nota de escopo do JSVM do PocketBase: cada callback (routerAdd) roda isolado em VM pool
 // portanto toda a lógica executável deve residir inline dentro de seu respectivo callback.

@@ -383,9 +383,13 @@ export default function ClientsPage() {
     } catch (err: unknown) {
       setSyncLoading(false)
       const msg = getErrorMessage(err)
+      console.error('[ClientsPage] Erro ao iniciar sincronização:', err)
       toast({
         title: 'Falha ao iniciar sincronização',
-        description: msg || 'Não foi possível conectar ao ERP FlexSmart.',
+        description:
+          msg && msg !== 'Something went wrong.'
+            ? msg
+            : 'Não foi possível conectar ao ERP FlexSmart.',
         variant: 'destructive',
       })
     }

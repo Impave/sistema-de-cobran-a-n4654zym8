@@ -26,97 +26,6 @@ try {
   }
 } catch (_) {}
 
-// Diagnóstico sob trigger de atualização em flex_sync
-onRecordUpdate((e) => {
-  try {
-    const errText = e.record.getString('error')
-    if (errText === 'TRIGGER_ALL_DIAGNOSTIC') {
-      const username =
-        $os.getenv('FLEXSMART_USERNAME') ||
-        ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
-      const password =
-        $os.getenv('FLEXSMART_PASSWORD') ||
-        ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
-
-      const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-      console.log('[FlexSmart-Diag] Efetuando login em ' + loginUrl + '...')
-      const loginRes = $http.send({
-        url: loginUrl,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, password: password }),
-        timeout: 30,
-      })
-
-      let pj = loginRes.json
-      if (!pj && loginRes.raw) {
-        try {
-          pj = JSON.parse(loginRes.raw)
-        } catch (_) {}
-      }
-
-      if (!pj || !pj.access_token) {
-        e.record.set('error', 'LOGIN_FAILED: ' + String(loginRes.raw).slice(0, 200))
-        return e.next()
-      }
-
-      const token = pj.access_token
-      console.log('[FlexSmart-Diag] Login OK! Token: ' + token.slice(0, 8) + '...')
-
-      console.log('[FlexSmart-Diag] Chamando GET /Cliente/getAll com AuthToken...')
-      const getAllRes = $http.send({
-        url: 'https://api.impave.com.br:8443/Cliente/getAll',
-        method: 'GET',
-        headers: {
-          AuthToken: token,
-          Accept: 'application/json',
-        },
-        timeout: 180,
-      })
-
-      console.log('[FlexSmart-Diag] /Cliente/getAll HTTP Status: ' + getAllRes.statusCode)
-
-      let dados = getAllRes.json
-      if (!dados && getAllRes.raw) {
-        try {
-          dados = JSON.parse(getAllRes.raw)
-        } catch (_) {}
-      }
-
-      const isArr = Array.isArray(dados)
-      const count = isArr ? dados.length : dados ? Object.keys(dados).length : 0
-      let sampleData = {}
-      if (isArr && dados.length > 0) {
-        sampleData = dados[0]
-        console.log('[FlexSmart-Diag] Sucesso! Array direto com ' + count + ' clientes.')
-        console.log(
-          '[FlexSmart-Diag] Exemplo 1º cliente: cdCliente=' +
-            sampleData.cdCliente +
-            ', nmCliente=' +
-            (sampleData.nmCliente || sampleData.nmFantasia),
-        )
-      } else if (!isArr && dados && typeof dados === 'object') {
-        console.log(
-          '[FlexSmart-Diag] Objeto retornado: chaves=[' + Object.keys(dados).join(', ') + ']',
-        )
-      } else {
-        console.log('[FlexSmart-Diag] Resposta inesperada: ' + String(getAllRes.raw).slice(0, 200))
-      }
-
-      e.record.set('sample', sampleData)
-      e.record.set('count', count)
-      e.record.set(
-        'error',
-        'STATUS_' + getAllRes.statusCode + '_ISARR_' + isArr + '_COUNT_' + count,
-      )
-    }
-  } catch (err) {
-    console.log('[FlexSmart-Diag] Exceção: ' + String(err))
-    e.record.set('error', 'EXC: ' + String(err).slice(0, 200))
-  }
-  return e.next()
-}, 'flex_sync')
-
 // 1. Rota para INICIAR a sincronização em segundo plano
 routerAdd(
   'POST',
@@ -753,7 +662,7 @@ routerAdd(
             $app.save(jobRec)
           } catch (_) {}
         }
-      }, 50)
+      }, 0)
 
       return e.json(200, {
         success: true,

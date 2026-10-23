@@ -704,10 +704,8 @@ routerAdd(
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
       console.log('[FlexSmart] Erro ao iniciar sincronização: ' + msg)
-      return e.json(400, {
-        success: false,
-        error: msg,
-      })
+      // Throws BadRequestError so PocketBase client SDK surfaces error.message and response.data.error properly
+      throw new BadRequestError(msg)
     }
   },
   $apis.requireAuth(),
@@ -838,7 +836,7 @@ routerAdd(
       })
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
-      return e.json(400, { error: msg })
+      throw new BadRequestError(msg)
     }
   },
   $apis.requireAuth(),
@@ -855,18 +853,18 @@ routerAdd(
       const ownerId = authRecord ? authRecord.id : null
 
       if (!ownerId) {
-        return e.json(401, { error: 'Usuário não autenticado' })
+        throw new UnauthorizedError('Usuário não autenticado')
       }
 
       let rec = null
       try {
         rec = $app.findRecordById('flex_sync', syncId)
       } catch (_) {
-        return e.json(404, { error: 'Sincronização não encontrada' })
+        throw new NotFoundError('Sincronização não encontrada')
       }
 
       if (rec.getString('owner') !== ownerId) {
-        return e.json(403, { error: 'Acesso negado' })
+        throw new ForbiddenError('Acesso negado')
       }
 
       let currentStatus = rec.getString('status')
@@ -921,7 +919,7 @@ routerAdd(
       })
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
-      return e.json(400, { error: msg })
+      throw new BadRequestError(msg)
     }
   },
   $apis.requireAuth(),
@@ -937,7 +935,7 @@ routerAdd(
       const ownerId = authRecord ? authRecord.id : null
 
       if (!ownerId) {
-        return e.json(401, { error: 'Usuário não autenticado' })
+        throw new UnauthorizedError('Usuário não autenticado')
       }
 
       const records = $app.findRecordsByFilter('flex_sync', 'owner = {:owner}', '-created', 1, 0, {
@@ -995,7 +993,7 @@ routerAdd(
       })
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
-      return e.json(400, { error: msg })
+      throw new BadRequestError(msg)
     }
   },
   $apis.requireAuth(),

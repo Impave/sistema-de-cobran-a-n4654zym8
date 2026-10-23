@@ -23,6 +23,127 @@ try {
 // Nota de escopo do JSVM do PocketBase: cada callback (routerAdd) roda isolado em VM pool
 // portanto toda a lógica executável deve residir inline dentro de seu respectivo callback.
 
+// Rota de teste de diagnóstico para consulta de cliente por CPF/CNPJ
+routerAdd('GET', '/backend/v1/flexsmart/test-get-by-cpf-cnpj', (e) => {
+  try {
+    const cpfCnpj = e.request.url.query().get('cpfCnpj') || '54295478000115'
+    console.log('[FlexSmart-TestClient] Iniciando teste para CPF/CNPJ: ' + cpfCnpj)
+
+    // Obter ou reutilizar access_token
+    let token = 'D783742C470F92FA80F5F833E4C0CE1A'
+    try {
+      if ($app.store && $app.store().has('flexsmart_cached_token')) {
+        const cached = $app.store().get('flexsmart_cached_token')
+        if (cached) token = String(cached)
+      }
+    } catch (_) {}
+
+    function performLogin() {
+      const username =
+        $os.getenv('FLEXSMART_USERNAME') ||
+        ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
+      const password =
+        $os.getenv('FLEXSMART_PASSWORD') ||
+        ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
+      const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+      console.log('[FlexSmart-TestClient] Fazendo login em ' + loginUrl)
+      const res = $http.send({
+        url: loginUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+        timeout: 30,
+      })
+      let pj = res.json
+      if (!pj && res.raw) {
+        try {
+          pj = JSON.parse(res.raw)
+        } catch (_) {}
+      }
+      if (pj && pj.access_token) {
+        if ($app.store) {
+          $app.store().set('flexsmart_cached_token', pj.access_token)
+          $app.store().set('flexsmart_token_time', String(Date.now()))
+        }
+        return pj.access_token
+      }
+      throw new Error('Falha no login: HTTP ' + res.statusCode + ' ' + (res.raw || ''))
+    }
+
+    const rawBase =
+      $os.getenv('FLEXSMART_BASE_URL') ||
+      ($secrets.has('FLEXSMART_BASE_URL') ? $secrets.get('FLEXSMART_BASE_URL') : '') ||
+      'https://api.impave.com.br:8443'
+    const baseUrl = rawBase.replace(/\/+$/, '')
+    const targetUrl = baseUrl + '/Cliente/getByCpfCnpj?cpfCnpj=' + encodeURIComponent(cpfCnpj)
+
+    console.log(
+      '[FlexSmart-TestClient] GET ' +
+        targetUrl +
+        ' com AuthToken: ' +
+        (token ? token.slice(0, 8) + '...' : 'none'),
+    )
+
+    let clientRes = $http.send({
+      url: targetUrl,
+      method: 'GET',
+      headers: {
+        AuthToken: token,
+      },
+      timeout: 30,
+    })
+
+    // Se 401 ou 403, tenta renovar o token e tentar novamente
+    if (clientRes.statusCode === 401 || clientRes.statusCode === 403) {
+      console.log('[FlexSmart-TestClient] HTTP ' + clientRes.statusCode + ', renovando token...')
+      token = performLogin()
+      clientRes = $http.send({
+        url: targetUrl,
+        method: 'GET',
+        headers: {
+          AuthToken: token,
+        },
+        timeout: 30,
+      })
+    }
+
+    console.log('[FlexSmart-TestClient] STATUS: ' + clientRes.statusCode)
+    const contentType = (clientRes.headers && clientRes.headers['content-type']) || 'desconhecido'
+    console.log('[FlexSmart-TestClient] CONTENT-TYPE: ' + contentType)
+    console.log('[FlexSmart-TestClient] RAW_BODY: ' + String(clientRes.raw).slice(0, 2000))
+
+    let parsed = clientRes.json
+    if (!parsed && clientRes.raw) {
+      try {
+        parsed = JSON.parse(clientRes.raw)
+      } catch (_) {}
+    }
+
+    const keys =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? Object.keys(parsed)
+        : Array.isArray(parsed)
+          ? ['array-length-' + parsed.length]
+          : []
+    console.log('[FlexSmart-TestClient] PARSED_KEYS: [' + keys.join(', ') + ']')
+
+    return e.json(200, {
+      success: true,
+      statusCode: clientRes.statusCode,
+      headers: clientRes.headers,
+      raw: clientRes.raw,
+      json: parsed,
+    })
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err)
+    console.log('[FlexSmart-TestClient] ERRO: ' + msg)
+    return e.json(500, {
+      success: false,
+      error: msg,
+    })
+  }
+})
+
 // Rota de teste/diagnóstico isolado do login do FlexSmart (Passo 1):
 // URL estrita: https://api.impave.com.br:8443/login?Content-Type=application/json
 // Body raw JSON: {"username": "...", "password": "..."}

@@ -43,7 +43,7 @@ export interface FlexSmartSyncResult {
 
 export interface FlexSmartSyncStatus {
   id: string
-  status: 'pending' | 'running' | 'done' | 'error'
+  status: 'pending' | 'running' | 'cancelling' | 'cancelled' | 'done' | 'error'
   currentStep: string
   count: number
   imported: number
@@ -54,6 +54,12 @@ export interface FlexSmartSyncStatus {
   startedAt?: string
   finishedAt?: string
   created?: string
+}
+
+export interface FlexSmartCancelSyncResult {
+  success: boolean
+  status: string
+  message: string
 }
 
 export interface ChargeRecord {

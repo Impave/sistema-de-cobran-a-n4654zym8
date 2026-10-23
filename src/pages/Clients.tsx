@@ -16,6 +16,9 @@ import {
   Building2,
   CheckCircle2,
   XCircle,
+  Square,
+  StopCircle,
+  Ban,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -67,6 +70,7 @@ export default function ClientsPage() {
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [syncLoading, setSyncLoading] = useState(false)
+  const [cancellingSync, setCancellingSync] = useState(false)
   const [activeSync, setActiveSync] = useState<FlexSmartSyncStatus | null>(null)
 
   const { toast } = useToast()
@@ -271,9 +275,14 @@ export default function ClientsPage() {
     }
   }, [])
 
-  // Polling quando activeSync estiver 'pending' ou 'running'
+  // Polling quando activeSync estiver 'pending', 'running' ou 'cancelling'
   useEffect(() => {
-    if (!activeSync || (activeSync.status !== 'pending' && activeSync.status !== 'running')) {
+    if (
+      !activeSync ||
+      (activeSync.status !== 'pending' &&
+        activeSync.status !== 'running' &&
+        activeSync.status !== 'cancelling')
+    ) {
       return
     }
 
@@ -282,9 +291,19 @@ export default function ClientsPage() {
         const status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
         setActiveSync(status)
 
-        if (status.status === 'done') {
+        if (status.status === 'cancelled') {
           clearInterval(interval)
           setSyncLoading(false)
+          setCancellingSync(false)
+          toast({
+            title: 'Importação interrompida',
+            description: `A importação foi cancelada. Clientes salvos até o momento: ${status.imported} processados (${status.createdCount} criados, ${status.updatedCount} atualizados).`,
+          })
+          loadData()
+        } else if (status.status === 'done') {
+          clearInterval(interval)
+          setSyncLoading(false)
+          setCancellingSync(false)
           toast({
             title: 'Sincronização concluída',
             description: `${status.createdCount} novos clientes importados, ${status.updatedCount} atualizados (${status.count} no ERP FlexSmart).`,
@@ -293,6 +312,7 @@ export default function ClientsPage() {
         } else if (status.status === 'error') {
           clearInterval(interval)
           setSyncLoading(false)
+          setCancellingSync(false)
           toast({
             title: 'Falha na sincronização com FlexSmart',
             description: status.error || 'Erro durante o processamento do ERP FlexSmart.',
@@ -306,6 +326,37 @@ export default function ClientsPage() {
 
     return () => clearInterval(interval)
   }, [activeSync?.id, activeSync?.status, loadData, toast])
+
+  // Interrupção / Cancelamento da importação
+  const handleCancelSync = async () => {
+    if (!activeSync) return
+    setCancellingSync(true)
+    try {
+      const res = await clientsService.cancelFlexSmartSync(activeSync.id)
+      setActiveSync((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: res.status === 'cancelled' ? 'cancelled' : 'cancelling',
+              currentStep: 'Interrupção solicitada pelo usuário...',
+            }
+          : null,
+      )
+      toast({
+        title: 'Interrupção solicitada',
+        description:
+          res.message || 'Interrompendo importação... Os clientes já salvos serão mantidos.',
+      })
+    } catch (err: unknown) {
+      setCancellingSync(false)
+      const msg = getErrorMessage(err)
+      toast({
+        title: 'Erro ao solicitar interrupção',
+        description: msg || 'Não foi possível cancelar o processo.',
+        variant: 'destructive',
+      })
+    }
+  }
 
   // Sincronização com o ERP FlexSmart (início assíncrono com barra de progresso)
   const handleSyncFlexSmart = async () => {
@@ -372,13 +423,22 @@ export default function ClientsPage() {
             disabled={
               syncLoading ||
               loading ||
+              cancellingSync ||
               activeSync?.status === 'running' ||
-              activeSync?.status === 'pending'
+              activeSync?.status === 'pending' ||
+              activeSync?.status === 'cancelling'
             }
             className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium shadow-xs"
             title="Sincronizar cadastros de clientes a partir do ERP FlexSmart"
           >
-            {syncLoading || activeSync?.status === 'running' || activeSync?.status === 'pending' ? (
+            {cancellingSync || activeSync?.status === 'cancelling' ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-amber-600" />
+                Interrompendo...
+              </>
+            ) : syncLoading ||
+              activeSync?.status === 'running' ||
+              activeSync?.status === 'pending' ? (
               <>
                 <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
                 Importando do ERP...
@@ -406,18 +466,26 @@ export default function ClientsPage() {
           className={
             activeSync.status === 'error'
               ? 'border-red-200 bg-red-50/50 shadow-xs'
-              : activeSync.status === 'done'
-                ? 'border-emerald-200 bg-emerald-50/40 shadow-xs'
-                : 'border-indigo-200 bg-indigo-50/40 shadow-xs'
+              : activeSync.status === 'cancelled'
+                ? 'border-amber-200 bg-amber-50/40 shadow-xs'
+                : activeSync.status === 'cancelling'
+                  ? 'border-amber-300 bg-amber-50/50 shadow-xs'
+                  : activeSync.status === 'done'
+                    ? 'border-emerald-200 bg-emerald-50/40 shadow-xs'
+                    : 'border-indigo-200 bg-indigo-50/40 shadow-xs'
           }
         >
           <CardContent className="p-4 space-y-3">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-2.5">
-                {activeSync.status === 'running' || activeSync.status === 'pending' ? (
+                {activeSync.status === 'cancelling' ? (
+                  <Loader2 className="w-5 h-5 text-amber-600 animate-spin shrink-0" />
+                ) : activeSync.status === 'running' || activeSync.status === 'pending' ? (
                   <Loader2 className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
                 ) : activeSync.status === 'done' ? (
                   <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                ) : activeSync.status === 'cancelled' ? (
+                  <Ban className="w-5 h-5 text-amber-600 shrink-0" />
                 ) : (
                   <XCircle className="w-5 h-5 text-red-600 shrink-0" />
                 )}
@@ -433,11 +501,17 @@ export default function ClientsPage() {
                           ? 'bg-emerald-100/70 text-emerald-800 border-emerald-300 text-[11px]'
                           : activeSync.status === 'error'
                             ? 'bg-red-100/70 text-red-800 border-red-300 text-[11px]'
-                            : 'bg-indigo-100/70 text-indigo-800 border-indigo-300 text-[11px]'
+                            : activeSync.status === 'cancelled'
+                              ? 'bg-amber-100/80 text-amber-800 border-amber-300 text-[11px]'
+                              : activeSync.status === 'cancelling'
+                                ? 'bg-amber-100 text-amber-900 border-amber-300 text-[11px]'
+                                : 'bg-indigo-100/70 text-indigo-800 border-indigo-300 text-[11px]'
                       }
                     >
                       {activeSync.status === 'pending' && 'Aguardando'}
                       {activeSync.status === 'running' && 'Em andamento'}
+                      {activeSync.status === 'cancelling' && 'Interrompendo...'}
+                      {activeSync.status === 'cancelled' && 'Interrompido'}
                       {activeSync.status === 'done' && 'Concluído'}
                       {activeSync.status === 'error' && 'Falha'}
                     </Badge>
@@ -446,28 +520,65 @@ export default function ClientsPage() {
                     {activeSync.currentStep ||
                       (activeSync.status === 'done'
                         ? 'Sincronização concluída com sucesso!'
-                        : activeSync.status === 'error'
-                          ? activeSync.error || 'Ocorreu um erro no ERP'
-                          : 'Processando...')}
+                        : activeSync.status === 'cancelled'
+                          ? 'Importação interrompida pelo usuário.'
+                          : activeSync.status === 'cancelling'
+                            ? 'Interrompendo importação...'
+                            : activeSync.status === 'error'
+                              ? activeSync.error || 'Ocorreu um erro no ERP'
+                              : 'Processando...')}
                   </p>
                 </div>
               </div>
 
-              {(activeSync.status === 'done' || activeSync.status === 'error') && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setActiveSync(null)}
-                  className="text-xs text-slate-500 hover:text-slate-800 h-7 px-2"
-                >
-                  Fechar
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                {/* Botão para interromper importação enquanto estiver em execução */}
+                {(activeSync.status === 'running' || activeSync.status === 'pending') && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCancelSync}
+                    disabled={cancellingSync}
+                    className="text-xs font-medium text-red-600 border-red-300 hover:bg-red-50 hover:text-red-700 h-8 gap-1.5 shadow-2xs"
+                    title="Interromper importação de clientes do ERP FlexSmart"
+                  >
+                    <Square className="w-3.5 h-3.5 fill-current" />
+                    Interromper importação
+                  </Button>
+                )}
+
+                {activeSync.status === 'cancelling' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled
+                    className="text-xs font-medium text-amber-700 border-amber-300 bg-amber-50/60 h-8 gap-1.5"
+                  >
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    Interrompendo...
+                  </Button>
+                )}
+
+                {(activeSync.status === 'done' ||
+                  activeSync.status === 'cancelled' ||
+                  activeSync.status === 'error') && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setActiveSync(null)}
+                    className="text-xs text-slate-500 hover:text-slate-800 h-7 px-2"
+                  >
+                    Fechar
+                  </Button>
+                )}
+              </div>
             </div>
 
-            {/* Barra de Progresso quando em execução ou concluído */}
+            {/* Barra de Progresso quando em execução, interrompendo, cancelado ou concluído */}
             {(activeSync.status === 'running' ||
               activeSync.status === 'pending' ||
+              activeSync.status === 'cancelling' ||
+              activeSync.status === 'cancelled' ||
               activeSync.status === 'done') && (
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs text-slate-600 font-medium">
@@ -478,7 +589,27 @@ export default function ClientsPage() {
                   </span>
                   <span className="font-semibold">{activeSync.percent}%</span>
                 </div>
-                <Progress value={activeSync.percent} className="h-2 bg-slate-200" />
+                <Progress
+                  value={activeSync.percent}
+                  className={`h-2 ${
+                    activeSync.status === 'cancelled'
+                      ? 'bg-amber-100 [&>div]:bg-amber-500'
+                      : activeSync.status === 'cancelling'
+                        ? 'bg-amber-100 [&>div]:bg-amber-500'
+                        : 'bg-slate-200'
+                  }`}
+                />
+              </div>
+            )}
+
+            {/* Resumo quando interrompido */}
+            {activeSync.status === 'cancelled' && (
+              <div className="text-xs text-amber-800 bg-amber-100/60 border border-amber-200 rounded-lg p-2.5 flex items-center justify-between">
+                <span>
+                  Processamento interrompido. Todos os <strong>{activeSync.imported}</strong>{' '}
+                  cliente(s) importados até a parada ({activeSync.createdCount} novos,{' '}
+                  {activeSync.updatedCount} atualizados) foram preservados com sucesso no banco.
+                </span>
               </div>
             )}
 

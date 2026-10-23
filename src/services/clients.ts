@@ -4,6 +4,7 @@ import type {
   ClientFormData,
   FlexSmartSyncResult,
   FlexSmartSyncStatus,
+  FlexSmartCancelSyncResult,
 } from '@/types'
 
 export const clientsService = {
@@ -66,6 +67,16 @@ export const clientsService = {
     }>('/backend/v1/flexsmart/start-sync', {
       method: 'POST',
     })
+    return res
+  },
+
+  async cancelFlexSmartSync(syncId: string): Promise<FlexSmartCancelSyncResult> {
+    const res = await pb.send<FlexSmartCancelSyncResult>(
+      `/backend/v1/flexsmart/cancel-sync/${syncId}`,
+      {
+        method: 'POST',
+      },
+    )
     return res
   },
 

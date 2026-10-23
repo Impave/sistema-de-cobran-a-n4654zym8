@@ -6,6 +6,7 @@
 // 5. Execução em segundo plano com gravação de progresso em lotes na coleção `flex_sync`
 // 6. Rotas:
 //    - POST /backend/v1/flexsmart/start-sync -> dispara o job assíncrono e retorna o id do registro em flex_sync
+//    - POST /backend/v1/flexsmart/cancel-sync/{id} -> solicita interrupção do job assíncrono
 //    - GET  /backend/v1/flexsmart/sync-status/{id} -> retorna o status do job (total, processados, criados, atualizados, erros)
 //    - GET  /backend/v1/flexsmart/last-sync -> retorna o último job de sincronização do usuário
 //    - POST /backend/v1/flexsmart/sync -> rota síncrona mantida por retrocompatibilidade
@@ -413,6 +414,20 @@ routerAdd(
         }
 
         try {
+          // Verifica se já foi cancelado antes de iniciar
+          try {
+            jobRec = $app.findRecordById('flex_sync', syncId)
+            const st = jobRec.getString('status')
+            if (st === 'cancelling' || st === 'cancelled') {
+              jobRec.set('status', 'cancelled')
+              jobRec.set('current_step', 'Importação cancelada antes de iniciar.')
+              jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+              $app.save(jobRec)
+              console.log('[FlexSmart-Async ' + syncId + '] Cancelado antes do início.')
+              return
+            }
+          } catch (_) {}
+
           jobRec.set('status', 'running')
           jobRec.set('current_step', 'Buscando clientes no ERP...')
           jobRec.set('started_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
@@ -459,9 +474,34 @@ routerAdd(
           let createdCount = 0
           let updatedCount = 0
           let errorCount = 0
+          let wasCancelled = false
           const BATCH_SIZE = 25
 
           for (let i = 0; i < totalErp; i++) {
+            // ANTES de cada lote (ou cliente), reler o status para checar solicitação de cancelamento
+            if (i % BATCH_SIZE === 0) {
+              try {
+                const checkRec = $app.findRecordById('flex_sync', syncId)
+                const currentStatus = checkRec.getString('status')
+                if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
+                  console.log(
+                    '[FlexSmart-Async ' +
+                      syncId +
+                      '] Interrupção solicitada detectada no índice ' +
+                      i +
+                      '. Finalizando como cancelado.',
+                  )
+                  wasCancelled = true
+                  jobRec = checkRec
+                  break
+                }
+              } catch (chkErr) {
+                console.log(
+                  '[FlexSmart-Async ' + syncId + '] Erro ao reler status: ' + String(chkErr),
+                )
+              }
+            }
+
             const item = erpList[i]
             if (!item || typeof item !== 'object') {
               errorCount++
@@ -656,6 +696,32 @@ routerAdd(
             }
           }
 
+          if (wasCancelled) {
+            jobRec.set('status', 'cancelled')
+            jobRec.set(
+              'current_step',
+              'Importação interrompida pelo usuário (' +
+                createdCount +
+                ' criados, ' +
+                updatedCount +
+                ' atualizados)',
+            )
+            jobRec.set('created_count', createdCount)
+            jobRec.set('updated_count', updatedCount)
+            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(jobRec)
+
+            console.log(
+              '[FlexSmart-Async ' +
+                syncId +
+                '] Interrompido pelo usuário com sucesso: processados até momento, criados=' +
+                createdCount +
+                ', atualizados=' +
+                updatedCount,
+            )
+            return
+          }
+
           jobRec.set('status', 'done')
           jobRec.set('imported', totalErp)
           jobRec.set('created_count', createdCount)
@@ -707,7 +773,84 @@ routerAdd(
   $apis.requireAuth(),
 )
 
-// 2. Rota para CONSULTAR o status do job de sincronização
+// 2. Rota para CANCELAR / INTERROMPER a sincronização em andamento
+routerAdd(
+  'POST',
+  '/backend/v1/flexsmart/cancel-sync/{id}',
+  (e) => {
+    try {
+      const syncId = e.request.pathValue('id')
+      const authRecord = e.auth
+      const ownerId = authRecord ? authRecord.id : null
+
+      if (!ownerId) {
+        return e.json(401, { error: 'Usuário não autenticado' })
+      }
+
+      let rec = null
+      try {
+        rec = $app.findRecordById('flex_sync', syncId)
+      } catch (_) {
+        return e.json(404, { error: 'Sincronização não encontrada' })
+      }
+
+      if (rec.getString('owner') !== ownerId) {
+        return e.json(403, { error: 'Acesso negado' })
+      }
+
+      const currentStatus = rec.getString('status')
+
+      // Se já terminou naturalmente ou já foi cancelado
+      if (currentStatus === 'done') {
+        return e.json(200, {
+          success: true,
+          status: 'done',
+          message: 'A importação já havia sido concluída com sucesso.',
+        })
+      }
+
+      if (currentStatus === 'error') {
+        return e.json(200, {
+          success: true,
+          status: 'error',
+          message: 'A importação já havia sido finalizada com erro.',
+        })
+      }
+
+      if (currentStatus === 'cancelled') {
+        return e.json(200, {
+          success: true,
+          status: 'cancelled',
+          message: 'A importação já estava cancelada.',
+        })
+      }
+
+      // Se estiver pending ou running, marca como cancelling
+      rec.set('status', 'cancelling')
+      rec.set('current_step', 'Interrupção solicitada pelo usuário...')
+      $app.save(rec)
+
+      console.log(
+        '[FlexSmart] Job de sincronização ' +
+          syncId +
+          ' marcado como cancelling pelo owner ' +
+          ownerId,
+      )
+
+      return e.json(200, {
+        success: true,
+        status: 'cancelling',
+        message: 'Interrupção solicitada com sucesso. O processamento será parado imediatamente.',
+      })
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err)
+      return e.json(400, { error: msg })
+    }
+  },
+  $apis.requireAuth(),
+)
+
+// 3. Rota para CONSULTAR o status do job de sincronização
 routerAdd(
   'GET',
   '/backend/v1/flexsmart/sync-status/{id}',
@@ -758,7 +901,7 @@ routerAdd(
   $apis.requireAuth(),
 )
 
-// 3. Rota para consultar o ÚLTIMO job de sincronização
+// 4. Rota para consultar o ÚLTIMO job de sincronização
 routerAdd(
   'GET',
   '/backend/v1/flexsmart/last-sync',
@@ -808,7 +951,7 @@ routerAdd(
   $apis.requireAuth(),
 )
 
-// 4. Rota de teste/diagnóstico para verificar o endpoint /Cliente/getAll
+// 5. Rota de teste/diagnóstico para verificar o endpoint /Cliente/getAll
 routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
   try {
     console.log('[FlexSmart-TestGetAll] Chamando /Cliente/getAll...')
@@ -910,7 +1053,7 @@ routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
   }
 })
 
-// 5. Rota de teste/diagnóstico de login (Passo 1)
+// 6. Rota de teste/diagnóstico de login (Passo 1)
 routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {
   try {
     const username =
@@ -957,7 +1100,7 @@ routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {
   }
 })
 
-// 6. Rota síncrona /backend/v1/flexsmart/sync (executa e retorna resultado final)
+// 7. Rota síncrona /backend/v1/flexsmart/sync (executa e retorna resultado final)
 routerAdd(
   'POST',
   '/backend/v1/flexsmart/sync',

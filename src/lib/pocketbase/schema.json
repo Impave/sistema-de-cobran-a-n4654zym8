@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-23T19:41:34.184Z",
+  "generatedAt": "2026-10-23T20:14:00.613Z",
   "collections": [
     {
       "name": "users",
@@ -239,7 +239,7 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["pending", "running", "done", "error"]
+          "selectValues": ["pending", "running", "cancelling", "cancelled", "done", "error"]
         },
         {
           "name": "started_at",

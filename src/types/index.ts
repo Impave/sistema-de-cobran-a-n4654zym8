@@ -54,6 +54,7 @@ export interface FlexSmartSyncStatus {
   startedAt?: string
   finishedAt?: string
   created?: string
+  updated?: string
 }
 
 export interface FlexSmartCancelSyncResult {

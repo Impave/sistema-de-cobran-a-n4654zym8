@@ -39,36 +39,50 @@ routerAdd(
         return e.json(401, { error: 'Usuário não autenticado' })
       }
 
-      // Verifica se já existe uma sincronização em andamento para este usuário nos últimos 10 minutos
-      const activeSyncs = $app.findRecordsByFilter(
-        'flex_sync',
-        'owner = {:owner} && status = "running"',
-        '-created',
-        1,
-        0,
-        { owner: ownerId },
-      )
+      // Limpa/finaliza jobs antigos que ficaram travados (running, pending, cancelling) sem finalização
+      try {
+        const staleSyncs = $app.findRecordsByFilter(
+          'flex_sync',
+          'owner = {:owner} && (status = "running" || status = "pending" || status = "cancelling")',
+          '-created',
+          20,
+          0,
+          { owner: ownerId },
+        )
 
-      if (activeSyncs.length > 0) {
-        const active = activeSyncs[0]
-        const createdTime = new Date(active.getString('created')).getTime()
-        const now = Date.now()
-        // Se tem menos de 10 minutos rodando, retorna o job existente
-        if (now - createdTime < 600000) {
-          return e.json(200, {
-            syncId: active.id,
-            status: active.getString('status'),
-            count: active.getInt('count'),
-            imported: active.getInt('imported'),
-            created_count: active.getInt('created_count'),
-            updated_count: active.getInt('updated_count'),
-            message: 'Uma sincronização já está em andamento.',
-          })
+        const nowTime = Date.now()
+        for (const stale of staleSyncs) {
+          const updatedStr = stale.getString('updated') || stale.getString('created')
+          const ageMs = nowTime - new Date(updatedStr).getTime()
+          const st = stale.getString('status')
+
+          // Se o job ficou em cancelling ou pending por mais de 2 minutos, ou running por mais de 5 minutos, ou foi interrompido por reinício
+          if (st === 'cancelling') {
+            stale.set('status', 'cancelled')
+            stale.set(
+              'current_step',
+              'Interrupção concluída (finalizado pelo sistema ao iniciar novo processo).',
+            )
+            stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(stale)
+            console.log('[FlexSmart] Job antigo em cancelling marcado como cancelled: ' + stale.id)
+          } else if (ageMs > 300000 || st === 'pending') {
+            // Mais de 5 minutos ou pending antigo: marca como erro/cancelado para não travar novas tentativas
+            stale.set('status', 'cancelled')
+            stale.set(
+              'current_step',
+              'Sessão anterior finalizada automaticamente para liberar nova sincronização.',
+            )
+            stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(stale)
+            console.log('[FlexSmart] Job antigo abandonado finalizado: ' + stale.id)
+          }
         }
+      } catch (staleErr) {
+        console.log('[FlexSmart] Aviso ao limpar jobs antigos: ' + String(staleErr))
       }
 
-      // Cria o registro na coleção flex_sync
-      const syncCol = $app.findCollectionByNameOrId('flex_sync')
+      // Cria o registro na coleção flex_sync      const syncCol = $app.findCollectionByNameOrId('flex_sync')
       const syncRec = new Record(syncCol)
       syncRec.set('owner', ownerId)
       syncRec.set('status', 'pending')
@@ -384,10 +398,10 @@ routerAdd(
           let updatedCount = 0
           let errorCount = 0
           let wasCancelled = false
-          const BATCH_SIZE = 25
+          const BATCH_SIZE = 10
 
           for (let i = 0; i < totalErp; i++) {
-            // ANTES de cada lote (ou cliente), reler o status para checar solicitação de cancelamento
+            // ANTES de cada lote, reler o status do registro no banco para checar solicitação de cancelamento
             if (i % BATCH_SIZE === 0) {
               try {
                 const checkRec = $app.findRecordById('flex_sync', syncId)
@@ -398,7 +412,7 @@ routerAdd(
                       syncId +
                       '] Interrupção solicitada detectada no índice ' +
                       i +
-                      '. Finalizando como cancelado.',
+                      '. Finalizando como cancelado imediatamente.',
                   )
                   wasCancelled = true
                   jobRec = checkRec
@@ -655,11 +669,27 @@ routerAdd(
           const msg = err && err.message ? err.message : String(err)
           console.log('[FlexSmart-Async ' + syncId + '] Falha: ' + msg)
           try {
-            jobRec.set('status', 'error')
-            jobRec.set('error', msg)
-            jobRec.set('current_step', 'Erro: ' + msg)
-            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(jobRec)
+            // Se durante o erro o usuário já tiver pedido para cancelar, prioriza cancelled
+            const freshRec = $app.findRecordById('flex_sync', syncId)
+            const st = freshRec.getString('status')
+            if (st === 'cancelling' || st === 'cancelled') {
+              freshRec.set('status', 'cancelled')
+              freshRec.set('current_step', 'Importação interrompida pelo usuário.')
+              freshRec.set(
+                'finished_at',
+                new Date().toISOString().replace('T', ' ').substring(0, 19),
+              )
+              $app.save(freshRec)
+            } else {
+              freshRec.set('status', 'error')
+              freshRec.set('error', msg)
+              freshRec.set('current_step', 'Erro: ' + msg)
+              freshRec.set(
+                'finished_at',
+                new Date().toISOString().replace('T', ' ').substring(0, 19),
+              )
+              $app.save(freshRec)
+            }
           } catch (_) {}
         }
       }, 0)
@@ -734,7 +764,61 @@ routerAdd(
         })
       }
 
-      // Se estiver pending ou running, marca como cancelling
+      // Se estiver pendente (ainda não começou a rodar o loop de clientes) ou se o job já estiver parado/órfão
+      // (ex.: se o started_at for nulo ou status for pending), transita direto para 'cancelled'
+      // para que a interface não fique presa esperando um loop que nem sequer iniciou.
+      const nowIso = new Date().toISOString().replace('T', ' ').substring(0, 19)
+      const importedSoFar = rec.getInt('imported')
+      const createdSoFar = rec.getInt('created_count')
+      const updatedSoFar = rec.getInt('updated_count')
+
+      if (currentStatus === 'pending') {
+        rec.set('status', 'cancelled')
+        rec.set('current_step', 'Importação cancelada antes de iniciar.')
+        rec.set('finished_at', nowIso)
+        $app.save(rec)
+
+        console.log(
+          '[FlexSmart] Job de sincronização ' +
+            syncId +
+            ' cancelado imediatamente (estava pending).',
+        )
+
+        return e.json(200, {
+          success: true,
+          status: 'cancelled',
+          message: 'Importação cancelada com sucesso.',
+        })
+      }
+
+      // Se estiver running ou já em cancelling, verifica se o job pode estar sem progresso recente
+      // Se não houve atualização nos últimos 60 segundos, considera o loop inativo e marca 'cancelled'
+      const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
+      const isStale = Date.now() - lastUpdated > 60000
+
+      if (isStale) {
+        rec.set('status', 'cancelled')
+        rec.set(
+          'current_step',
+          'Importação interrompida (' + createdSoFar + ' novos, ' + updatedSoFar + ' atualizados).',
+        )
+        rec.set('finished_at', nowIso)
+        $app.save(rec)
+
+        console.log(
+          '[FlexSmart] Job ' +
+            syncId +
+            ' marcado diretamente como cancelled pois estava inativo há mais de 60s.',
+        )
+
+        return e.json(200, {
+          success: true,
+          status: 'cancelled',
+          message: 'Importação interrompida. Os clientes já salvos foram preservados.',
+        })
+      }
+
+      // Caso o processamento esteja rodando ativamente, marca como cancelling
       rec.set('status', 'cancelling')
       rec.set('current_step', 'Interrupção solicitada pelo usuário...')
       $app.save(rec)
@@ -784,13 +868,44 @@ routerAdd(
         return e.json(403, { error: 'Acesso negado' })
       }
 
+      let currentStatus = rec.getString('status')
+
+      // Auto-recuperação: se estiver em cancelling por mais de 15 segundos sem que o loop tenha finalizado,
+      // força a transição para 'cancelled' para que nem o backend nem o frontend fiquem presos.
+      if (currentStatus === 'cancelling') {
+        const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
+        if (Date.now() - lastUpdated > 15000) {
+          try {
+            currentStatus = 'cancelled'
+            rec.set('status', 'cancelled')
+            rec.set(
+              'current_step',
+              'Importação interrompida (' +
+                rec.getInt('created_count') +
+                ' novos, ' +
+                rec.getInt('updated_count') +
+                ' atualizados).',
+            )
+            rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(rec)
+            console.log(
+              '[FlexSmart] Job ' +
+                syncId +
+                ' transicionado automaticamente de cancelling para cancelled por timeout.',
+            )
+          } catch (autoErr) {
+            console.log('[FlexSmart] Falha ao auto-cancelar: ' + String(autoErr))
+          }
+        }
+      }
+
       const total = rec.getInt('count')
       const imported = rec.getInt('imported')
       const progressPercent = total > 0 ? Math.min(100, Math.round((imported / total) * 100)) : 0
 
       return e.json(200, {
         id: rec.id,
-        status: rec.getString('status'),
+        status: currentStatus,
         currentStep: rec.getString('current_step'),
         count: total,
         imported: imported,
@@ -801,6 +916,7 @@ routerAdd(
         startedAt: rec.getString('started_at'),
         finishedAt: rec.getString('finished_at'),
         created: rec.getString('created'),
+        updated: rec.getString('updated'),
       })
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
@@ -832,6 +948,29 @@ routerAdd(
       }
 
       const rec = records[0]
+      let statusVal = rec.getString('status')
+
+      // Auto-recuperação no last-sync: se estiver em cancelling ou pending por muito tempo, ajusta para cancelled
+      if (statusVal === 'cancelling') {
+        const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
+        if (Date.now() - lastUpdated > 15000) {
+          try {
+            statusVal = 'cancelled'
+            rec.set('status', 'cancelled')
+            rec.set(
+              'current_step',
+              'Importação interrompida (' +
+                rec.getInt('created_count') +
+                ' novos, ' +
+                rec.getInt('updated_count') +
+                ' atualizados).',
+            )
+            rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(rec)
+          } catch (_) {}
+        }
+      }
+
       const total = rec.getInt('count')
       const imported = rec.getInt('imported')
       const progressPercent = total > 0 ? Math.min(100, Math.round((imported / total) * 100)) : 0
@@ -839,7 +978,7 @@ routerAdd(
       return e.json(200, {
         lastSync: {
           id: rec.id,
-          status: rec.getString('status'),
+          status: statusVal,
           currentStep: rec.getString('current_step'),
           count: total,
           imported: imported,
@@ -850,6 +989,7 @@ routerAdd(
           startedAt: rec.getString('started_at'),
           finishedAt: rec.getString('finished_at'),
           created: rec.getString('created'),
+          updated: rec.getString('updated'),
         },
       })
     } catch (err) {

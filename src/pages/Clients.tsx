@@ -265,8 +265,16 @@ export default function ClientsPage() {
       .getLastFlexSmartSync()
       .then((res) => {
         if (isMounted && res.lastSync) {
-          // Se tiver um job concluído recente ou em andamento, armazena
-          setActiveSync(res.lastSync)
+          // Se o último sync estiver marcado como cancelling há mais de 10s, trata como cancelled
+          const sync = res.lastSync
+          if (sync.status === 'cancelling') {
+            const syncTime = sync.updated ? new Date(sync.updated).getTime() : 0
+            if (!syncTime || Date.now() - syncTime > 10000) {
+              sync.status = 'cancelled'
+              sync.currentStep = sync.currentStep || 'Importação interrompida pelo usuário.'
+            }
+          }
+          setActiveSync(sync)
         }
       })
       .catch((_) => {})
@@ -286,8 +294,34 @@ export default function ClientsPage() {
       return
     }
 
+    const startTime = Date.now()
+    const isCancellingInitial = activeSync.status === 'cancelling'
+
     const interval = setInterval(async () => {
       try {
+        // Timeout de segurança no frontend: se estiver em cancelling por mais de 20s,
+        // força o estado visual para 'cancelled' para liberar o botão e a interface.
+        if (activeSync.status === 'cancelling' && Date.now() - startTime > 20000) {
+          clearInterval(interval)
+          setSyncLoading(false)
+          setCancellingSync(false)
+          setActiveSync((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: 'cancelled',
+                  currentStep: 'Importação interrompida.',
+                }
+              : null,
+          )
+          toast({
+            title: 'Importação interrompida',
+            description: 'A importação foi finalizada. O botão foi liberado para nova tentativa.',
+          })
+          loadData()
+          return
+        }
+
         const status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
         setActiveSync(status)
 
@@ -333,20 +367,38 @@ export default function ClientsPage() {
     setCancellingSync(true)
     try {
       const res = await clientsService.cancelFlexSmartSync(activeSync.id)
+      const finalStatus = res.status === 'cancelled' ? 'cancelled' : 'cancelling'
+
+      if (finalStatus === 'cancelled') {
+        setCancellingSync(false)
+        setSyncLoading(false)
+      }
+
       setActiveSync((prev) =>
         prev
           ? {
               ...prev,
-              status: res.status === 'cancelled' ? 'cancelled' : 'cancelling',
-              currentStep: 'Interrupção solicitada pelo usuário...',
+              status: finalStatus,
+              currentStep:
+                finalStatus === 'cancelled'
+                  ? 'Importação interrompida.'
+                  : 'Interrupção solicitada pelo usuário...',
             }
           : null,
       )
+
       toast({
-        title: 'Interrupção solicitada',
+        title: finalStatus === 'cancelled' ? 'Importação interrompida' : 'Interrupção solicitada',
         description:
-          res.message || 'Interrompendo importação... Os clientes já salvos serão mantidos.',
+          res.message ||
+          (finalStatus === 'cancelled'
+            ? 'Importação finalizada. Clientes já salvos foram mantidos.'
+            : 'Interrompendo importação... Os clientes já salvos serão mantidos.'),
       })
+
+      if (finalStatus === 'cancelled') {
+        loadData()
+      }
     } catch (err: unknown) {
       setCancellingSync(false)
       const msg = getErrorMessage(err)

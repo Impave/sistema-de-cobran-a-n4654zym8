@@ -1,9 +1,10 @@
 // flexsmart_sync.js - Integração com ERP FlexSmart
-// 1. POST /login com username/password dos segredos -> AuthToken
+// 1. POST /login com username/password dos segredos -> access_token
 // 2. Cache em memória do token ($app.store()) com re-login automático em caso de 401/403
 // 3. GET /Cliente/getAll com header AuthToken
 // 4. Mapeamento e deduplicação (erp_code e CPF/CNPJ) na coleção clients para o usuário daniel@impave.com.br
 // 5. Rota POST /backend/v1/flexsmart/sync (requer autenticação PocketBase)
+// 6. Rota POST /backend/v1/flexsmart/test-login (requer autenticação PocketBase)
 //
 // NOTA: Sincronização estritamente MANUAL a pedido do usuário (sem cron / sem execução automática).
 // A integração com a API da FlexSmart NÃO deve rodar de forma automática sob nenhuma hipótese.
@@ -22,82 +23,134 @@ try {
 // Nota de escopo do JSVM do PocketBase: cada callback (routerAdd) roda isolado em VM pool
 // portanto toda a lógica executável deve residir inline dentro de seu respectivo callback.
 
+// Rota de teste/diagnóstico isolado do login do FlexSmart (Passo 1):
+// URL estrita: https://api.impave.com.br:8443/login?Content-Type=application/json
+// Body raw JSON: {"username": "...", "password": "..."}
+// Header: Content-Type: application/json
+routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {
+  try {
+    const username =
+      $os.getenv('FLEXSMART_USERNAME') ||
+      ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
+    const password =
+      $os.getenv('FLEXSMART_PASSWORD') ||
+      ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
+
+    if (!username || !password) {
+      throw new Error(
+        'Credenciais FlexSmart não configuradas (FLEXSMART_USERNAME / FLEXSMART_PASSWORD)',
+      )
+    }
+
+    const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+    console.log('[FlexSmart-Test] Executando login em ' + loginUrl + ' para usuário: ' + username)
+
+    const jsonBodyStr = JSON.stringify({
+      username: username,
+      password: password,
+    })
+
+    let res = null
+    let sendErr = null
+    try {
+      res = $http.send({
+        url: loginUrl,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: jsonBodyStr,
+        timeout: 30,
+      })
+    } catch (err) {
+      sendErr = err
+      console.log('[FlexSmart-Test] Erro de rede ao enviar requisição: ' + String(err))
+    }
+
+    if (!res) {
+      throw new Error(
+        'Falha de rede ao tentar conectar na API FlexSmart: ' +
+          (sendErr ? String(sendErr) : 'sem resposta'),
+      )
+    }
+
+    let parsedJson = res.json
+    if (!parsedJson && res.raw) {
+      try {
+        parsedJson = JSON.parse(res.raw)
+      } catch (_) {}
+    }
+
+    const keysList = parsedJson && typeof parsedJson === 'object' ? Object.keys(parsedJson) : []
+
+    console.log(
+      '[FlexSmart-Test] Resposta HTTP ' +
+        res.statusCode +
+        ' | Chaves da resposta: [' +
+        keysList.join(', ') +
+        ']',
+    )
+
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      let detail = ''
+      if (parsedJson && typeof parsedJson === 'object') {
+        detail = ': ' + (parsedJson.message || parsedJson.error || JSON.stringify(parsedJson))
+      } else if (res.raw) {
+        detail =
+          ': ' +
+          String(res.raw)
+            .replace(/[\r\n]+/g, ' ')
+            .slice(0, 200)
+      }
+      throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
+    }
+
+    const token =
+      parsedJson && typeof parsedJson.access_token === 'string'
+        ? parsedJson.access_token.trim()
+        : null
+
+    if (!token) {
+      throw new Error(
+        'Campo "access_token" não encontrado na resposta de login (chaves retornadas: [' +
+          keysList.join(', ') +
+          '])',
+      )
+    }
+
+    // Atualiza cache em memória
+    try {
+      if ($app.store) {
+        $app.store().set('flexsmart_cached_token', token)
+        $app.store().set('flexsmart_token_time', String(Date.now()))
+      }
+    } catch (_) {}
+
+    console.log('[FlexSmart-Test] Sucesso! access_token obtido: ' + token)
+
+    return e.json(200, {
+      success: true,
+      statusCode: res.statusCode,
+      responseKeys: keysList,
+      access_token: token,
+    })
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err)
+    return e.json(400, {
+      success: false,
+      error: msg,
+    })
+  }
+})
+
+// Rota de sincronização completa de clientes do ERP FlexSmart
 routerAdd(
   'POST',
   '/backend/v1/flexsmart/sync',
   (e) => {
     let lastStep = 'init'
     try {
-      function extractTokenFromResponse(jsonBody, rawBody) {
-        if (jsonBody && typeof jsonBody === 'object') {
-          // 1. Prioridade máxima: access_token (validado via Postman)
-          if (typeof jsonBody.access_token === 'string' && jsonBody.access_token.trim()) {
-            return { token: jsonBody.access_token.trim(), field: 'access_token' }
-          }
-          // Fallbacks: client_id, token, authToken, AuthToken, accessToken, jwt, id_token, data
-          if (typeof jsonBody.client_id === 'string' && jsonBody.client_id.trim()) {
-            return { token: jsonBody.client_id.trim(), field: 'client_id' }
-          }
-          if (typeof jsonBody.token === 'string' && jsonBody.token.trim()) {
-            return { token: jsonBody.token.trim(), field: 'token' }
-          }
-          if (typeof jsonBody.authToken === 'string' && jsonBody.authToken.trim()) {
-            return { token: jsonBody.authToken.trim(), field: 'authToken' }
-          }
-          if (typeof jsonBody.AuthToken === 'string' && jsonBody.AuthToken.trim()) {
-            return { token: jsonBody.AuthToken.trim(), field: 'AuthToken' }
-          }
-          if (typeof jsonBody.accessToken === 'string' && jsonBody.accessToken.trim()) {
-            return { token: jsonBody.accessToken.trim(), field: 'accessToken' }
-          }
-          if (typeof jsonBody.jwt === 'string' && jsonBody.jwt.trim()) {
-            return { token: jsonBody.jwt.trim(), field: 'jwt' }
-          }
-          if (typeof jsonBody.id_token === 'string' && jsonBody.id_token.trim()) {
-            return { token: jsonBody.id_token.trim(), field: 'id_token' }
-          }
-          if (typeof jsonBody.data === 'string' && jsonBody.data.trim()) {
-            return { token: jsonBody.data.trim(), field: 'data' }
-          }
-
-          const nested = jsonBody.data || jsonBody.result || jsonBody.response
-          if (nested && typeof nested === 'object') {
-            const nestedRes = extractTokenFromResponse(nested, null)
-            if (nestedRes) return { token: nestedRes.token, field: 'nested.' + nestedRes.field }
-          }
-        }
-
-        if (rawBody) {
-          let str = ''
-          if (typeof rawBody === 'string') {
-            str = rawBody.trim()
-          } else if (rawBody && rawBody.length) {
-            for (let i = 0; i < Math.min(rawBody.length, 1000); i++) {
-              str += String.fromCharCode(rawBody[i])
-            }
-            str = str.trim()
-          }
-          if (str.startsWith('"') && str.endsWith('"')) {
-            str = str.slice(1, -1)
-          }
-          if (str.length > 10 && !str.startsWith('<') && !str.startsWith('{')) {
-            return { token: str, field: 'rawBody' }
-          }
-        }
-
-        if (typeof jsonBody === 'string' && jsonBody.trim().length > 10) {
-          return { token: jsonBody.trim(), field: 'stringJsonBody' }
-        }
-
-        return null
-      }
-
       function getFlexSmartToken(forceRefresh) {
-        const rawBase =
-          $os.getenv('FLEXSMART_BASE_URL') ||
-          ($secrets.has('FLEXSMART_BASE_URL') ? $secrets.get('FLEXSMART_BASE_URL') : '') ||
-          'https://api.impave.com.br:8443'
-        const base = rawBase.replace(/\/+$/, '')
         const username =
           $os.getenv('FLEXSMART_USERNAME') ||
           ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
@@ -128,77 +181,84 @@ routerAdd(
           } catch (_) {}
         }
 
-        console.log('[FlexSmart] Realizando login em ' + base + '/login')
+        const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+        console.log('[FlexSmart] Realizando login estrito em ' + loginUrl)
 
-        let res
-        let lastLoginError = null
-
-        // Chamada de autenticação JSON validada no ERP FlexSmart:
-        // POST https://api.impave.com.br:8443/login com body JSON {"username": "...", "password": "..."}
-        // O $http.send do PocketBase envia headers com content-type: application/json
         const jsonBodyStr = JSON.stringify({
           username: username,
           password: password,
         })
 
-        const reqConfig = {
-          url: base + '/login',
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            accept: 'application/json',
-          },
-          body: jsonBodyStr,
-          timeout: 30,
-        }
-
+        let res = null
+        let sendErr = null
         try {
-          res = $http.send(reqConfig)
+          res = $http.send({
+            url: loginUrl,
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: jsonBodyStr,
+            timeout: 30,
+          })
         } catch (errSend) {
-          lastLoginError = errSend
+          sendErr = errSend
           console.log('[FlexSmart] Erro na requisição HTTP de login: ' + String(errSend))
         }
 
         if (!res) {
           throw new Error(
             'Falha de conexão ao tentar login no FlexSmart: ' +
-              (lastLoginError ? String(lastLoginError) : 'sem resposta'),
+              (sendErr ? String(sendErr) : 'sem resposta'),
           )
         }
 
-        const keysList =
-          res.json && typeof res.json === 'object' ? Object.keys(res.json).join(', ') : 'sem json'
+        let parsedJson = res.json
+        if (!parsedJson && res.raw) {
+          try {
+            parsedJson = JSON.parse(res.raw)
+          } catch (_) {}
+        }
+
+        const keysList = parsedJson && typeof parsedJson === 'object' ? Object.keys(parsedJson) : []
+
         console.log(
-          '[FlexSmart] Resposta do login (HTTP ' + res.statusCode + ') chaves: [' + keysList + ']',
+          '[FlexSmart] Resposta do login (HTTP ' +
+            res.statusCode +
+            ') chaves: [' +
+            keysList.join(', ') +
+            ']',
         )
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
           let detail = ''
-          if (res.json && typeof res.json === 'object' && (res.json.message || res.json.error)) {
-            detail = ': ' + (res.json.message || res.json.error)
+          if (parsedJson && typeof parsedJson === 'object') {
+            detail = ': ' + (parsedJson.message || parsedJson.error || JSON.stringify(parsedJson))
           } else if (res.raw) {
-            detail = ': ' + res.raw.replace(/[\r\n]+/g, ' ').slice(0, 200)
+            detail =
+              ': ' +
+              String(res.raw)
+                .replace(/[\r\n]+/g, ' ')
+                .slice(0, 200)
           }
           throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
         }
 
-        const extracted = extractTokenFromResponse(res.json, res.body)
-        if (!extracted || !extracted.token) {
+        const token =
+          parsedJson && typeof parsedJson.access_token === 'string'
+            ? parsedJson.access_token.trim()
+            : null
+
+        if (!token) {
           console.log(
-            '[FlexSmart] Login retornou status ' +
+            '[FlexSmart] Resposta HTTP ' +
               res.statusCode +
-              ' mas formato do token não foi reconhecido. Chaves: [' +
-              keysList +
+              ' não continha o campo access_token. Chaves: [' +
+              keysList.join(', ') +
               ']',
           )
-          throw new Error('Token de autenticação não encontrado na resposta de login do FlexSmart')
+          throw new Error('Token "access_token" não encontrado na resposta de login do FlexSmart')
         }
-
-        const token = extracted.token
-        const tokenField = extracted.field || 'desconhecido'
-        const prefix = token.length >= 8 ? token.slice(0, 8) + '...' : token
-
-        console.log('[FlexSmart] Token obtido (campo: ' + tokenField + ', prefixo: ' + prefix + ')')
 
         try {
           if ($app.store) {
@@ -223,7 +283,6 @@ routerAdd(
         let res
         let lastErr = null
 
-        // Tenta enviar com AuthToken
         try {
           res = $http.send({
             url: base + '/Cliente/getAll',
@@ -266,8 +325,6 @@ routerAdd(
         }
 
         let dados = res.json
-
-        // Se res.json não foi parseado automaticamente mas veio string no body
         if (!dados && res.raw) {
           try {
             dados = JSON.parse(res.raw)
@@ -315,13 +372,11 @@ routerAdd(
               return dados[key]
             }
           }
-          // Se houver qualquer propriedade que seja array
           for (const k of Object.keys(dados)) {
             if (Array.isArray(dados[k])) {
               return dados[k]
             }
           }
-          // Se vier um único objeto cliente em vez de array
           if (
             dados.id ||
             dados.codigo ||
@@ -410,7 +465,6 @@ routerAdd(
         }
 
         try {
-          // Suporte a campos aninhados ou variações comuns
           const erpCode = pickFirst(item, [
             'codigo',
             'codCliente',

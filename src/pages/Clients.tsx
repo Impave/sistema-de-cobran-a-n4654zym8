@@ -254,25 +254,89 @@ export default function ClientsPage() {
     }
   }
 
-  // Sincronização com o ERP FlexSmart
+  // Carrega o último status de sincronização ao montar
+  useEffect(() => {
+    let isMounted = true
+    clientsService
+      .getLastFlexSmartSync()
+      .then((res) => {
+        if (isMounted && res.lastSync) {
+          // Se tiver um job concluído recente ou em andamento, armazena
+          setActiveSync(res.lastSync)
+        }
+      })
+      .catch((_) => {})
+    return () => {
+      isMounted = false
+    }
+  }, [])
+
+  // Polling quando activeSync estiver 'pending' ou 'running'
+  useEffect(() => {
+    if (!activeSync || (activeSync.status !== 'pending' && activeSync.status !== 'running')) {
+      return
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
+        setActiveSync(status)
+
+        if (status.status === 'done') {
+          clearInterval(interval)
+          setSyncLoading(false)
+          toast({
+            title: 'Sincronização concluída',
+            description: `${status.createdCount} novos clientes importados, ${status.updatedCount} atualizados (${status.count} no ERP FlexSmart).`,
+          })
+          loadData()
+        } else if (status.status === 'error') {
+          clearInterval(interval)
+          setSyncLoading(false)
+          toast({
+            title: 'Falha na sincronização com FlexSmart',
+            description: status.error || 'Erro durante o processamento do ERP FlexSmart.',
+            variant: 'destructive',
+          })
+        }
+      } catch (err) {
+        console.error('Erro no polling do FlexSmart:', err)
+      }
+    }, 1500)
+
+    return () => clearInterval(interval)
+  }, [activeSync?.id, activeSync?.status, loadData, toast])
+
+  // Sincronização com o ERP FlexSmart (início assíncrono com barra de progresso)
   const handleSyncFlexSmart = async () => {
     setSyncLoading(true)
     try {
-      const result = await clientsService.syncFlexSmart()
-      toast({
-        title: 'Sincronização concluída',
-        description: `${result.created} novos clientes importados, ${result.updated} atualizados (${result.totalErp} no ERP FlexSmart).`,
-      })
-      await loadData()
+      const res = await clientsService.startFlexSmartSync()
+      if (res.syncId) {
+        // Inicializa o activeSync para iniciar o polling imediatamente
+        setActiveSync({
+          id: res.syncId,
+          status: 'pending',
+          currentStep: 'Iniciando importação do ERP...',
+          count: 0,
+          imported: 0,
+          createdCount: 0,
+          updatedCount: 0,
+          percent: 0,
+        })
+        toast({
+          title: 'Sincronização iniciada',
+          description: 'A importação do FlexSmart está sendo processada em segundo plano.',
+        })
+      }
     } catch (err: unknown) {
+      setSyncLoading(false)
       const msg = getErrorMessage(err)
       toast({
-        title: 'Falha na sincronização com FlexSmart',
-        description: msg || 'Não foi possível sincronizar com o ERP FlexSmart.',
+        title: 'Falha ao iniciar sincronização',
+        description: msg || 'Não foi possível conectar ao ERP FlexSmart.',
         variant: 'destructive',
       })
-    } finally {
-      setSyncLoading(false)
     }
   }
 
@@ -305,11 +369,16 @@ export default function ClientsPage() {
             type="button"
             variant="outline"
             onClick={handleSyncFlexSmart}
-            disabled={syncLoading || loading}
+            disabled={
+              syncLoading ||
+              loading ||
+              activeSync?.status === 'running' ||
+              activeSync?.status === 'pending'
+            }
             className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium shadow-xs"
             title="Sincronizar cadastros de clientes a partir do ERP FlexSmart"
           >
-            {syncLoading ? (
+            {syncLoading || activeSync?.status === 'running' || activeSync?.status === 'pending' ? (
               <>
                 <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
                 Importando do ERP...
@@ -331,8 +400,98 @@ export default function ClientsPage() {
           </Button>
         </div>
       </div>
+      {/* Card de Progresso / Status do FlexSmart */}
+      {activeSync && (
+        <Card
+          className={
+            activeSync.status === 'error'
+              ? 'border-red-200 bg-red-50/50 shadow-xs'
+              : activeSync.status === 'done'
+                ? 'border-emerald-200 bg-emerald-50/40 shadow-xs'
+                : 'border-indigo-200 bg-indigo-50/40 shadow-xs'
+          }
+        >
+          <CardContent className="p-4 space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-2.5">
+                {activeSync.status === 'running' || activeSync.status === 'pending' ? (
+                  <Loader2 className="w-5 h-5 text-indigo-600 animate-spin shrink-0" />
+                ) : activeSync.status === 'done' ? (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                ) : (
+                  <XCircle className="w-5 h-5 text-red-600 shrink-0" />
+                )}
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-sm text-slate-900">
+                      Integração FlexSmart ERP
+                    </span>
+                    <Badge
+                      variant="outline"
+                      className={
+                        activeSync.status === 'done'
+                          ? 'bg-emerald-100/70 text-emerald-800 border-emerald-300 text-[11px]'
+                          : activeSync.status === 'error'
+                            ? 'bg-red-100/70 text-red-800 border-red-300 text-[11px]'
+                            : 'bg-indigo-100/70 text-indigo-800 border-indigo-300 text-[11px]'
+                      }
+                    >
+                      {activeSync.status === 'pending' && 'Aguardando'}
+                      {activeSync.status === 'running' && 'Em andamento'}
+                      {activeSync.status === 'done' && 'Concluído'}
+                      {activeSync.status === 'error' && 'Falha'}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {activeSync.currentStep ||
+                      (activeSync.status === 'done'
+                        ? 'Sincronização concluída com sucesso!'
+                        : activeSync.status === 'error'
+                          ? activeSync.error || 'Ocorreu um erro no ERP'
+                          : 'Processando...')}
+                  </p>
+                </div>
+              </div>
 
-      {/* Barra de Busca */}
+              {(activeSync.status === 'done' || activeSync.status === 'error') && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setActiveSync(null)}
+                  className="text-xs text-slate-500 hover:text-slate-800 h-7 px-2"
+                >
+                  Fechar
+                </Button>
+              )}
+            </div>
+
+            {/* Barra de Progresso quando em execução ou concluído */}
+            {(activeSync.status === 'running' ||
+              activeSync.status === 'pending' ||
+              activeSync.status === 'done') && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-slate-600 font-medium">
+                  <span>
+                    {activeSync.count > 0
+                      ? `${activeSync.imported} de ${activeSync.count} processados (${activeSync.createdCount} novos, ${activeSync.updatedCount} atualizados)`
+                      : 'Carregando lista de clientes do ERP...'}
+                  </span>
+                  <span className="font-semibold">{activeSync.percent}%</span>
+                </div>
+                <Progress value={activeSync.percent} className="h-2 bg-slate-200" />
+              </div>
+            )}
+
+            {/* Mensagem detalhada de erro real se houver */}
+            {activeSync.status === 'error' && activeSync.error && (
+              <div className="text-xs text-red-700 bg-red-100/70 border border-red-200 rounded-lg p-2.5 break-words font-mono">
+                {activeSync.error}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {/* Barra de Busca */}{' '}
       <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs flex items-center gap-3">
         <Search className="w-4 h-4 text-slate-400 ml-1" />
         <Input
@@ -353,7 +512,6 @@ export default function ClientsPage() {
           </Button>
         )}
       </div>
-
       {/* Conteúdo Principal */}
       {loading ? (
         <div className="flex flex-col items-center justify-center min-h-[300px]">
@@ -584,7 +742,6 @@ export default function ClientsPage() {
           </div>
         </>
       )}
-
       {/* Modal de Criação / Edição */}
       <Dialog open={isFormOpen} onOpenChange={(open) => !open && handleCloseForm()}>
         <DialogContent className="sm:max-w-lg rounded-2xl max-h-[90vh] overflow-y-auto">
@@ -740,7 +897,6 @@ export default function ClientsPage() {
           </form>
         </DialogContent>
       </Dialog>
-
       {/* Modal de Confirmação de Exclusão */}
       <Dialog open={isDeleteOpen} onOpenChange={(open) => !open && handleCloseDelete()}>
         <DialogContent className="sm:max-w-md rounded-2xl">

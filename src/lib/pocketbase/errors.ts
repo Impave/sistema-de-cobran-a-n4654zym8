@@ -24,6 +24,25 @@ export function getErrorMessage(error: unknown): string {
   if (!(error instanceof ClientResponseError)) {
     return error instanceof Error ? error.message : 'An unexpected error occurred.'
   }
+  const responseData = error.response as Record<string, unknown> | undefined
+  if (responseData) {
+    if (typeof responseData.error === 'string' && responseData.error) {
+      return responseData.error
+    }
+    if (
+      typeof responseData.message === 'string' &&
+      responseData.message &&
+      responseData.message !== 'Something went wrong.'
+    ) {
+      return responseData.message
+    }
+  }
   const msgs = Object.values(extractFieldErrors(error))
-  return msgs.length > 0 ? msgs.join(' ') : error.message || 'An unexpected error occurred.'
+  if (msgs.length > 0) {
+    return msgs.join(' ')
+  }
+  if (error.message && error.message !== 'Something went wrong.') {
+    return error.message
+  }
+  return 'Ocorreu um erro inesperado ao se comunicar com o servidor.'
 }

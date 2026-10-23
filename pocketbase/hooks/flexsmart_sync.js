@@ -82,7 +82,8 @@ routerAdd(
         console.log('[FlexSmart] Aviso ao limpar jobs antigos: ' + String(staleErr))
       }
 
-      // Cria o registro na coleção flex_sync      const syncCol = $app.findCollectionByNameOrId('flex_sync')
+      // Cria o registro na coleção flex_sync
+      const syncCol = $app.findCollectionByNameOrId('flex_sync')
       const syncRec = new Record(syncCol)
       syncRec.set('owner', ownerId)
       syncRec.set('status', 'pending')

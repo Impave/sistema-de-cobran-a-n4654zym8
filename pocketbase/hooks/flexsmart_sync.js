@@ -133,93 +133,30 @@ routerAdd(
         let res
         let lastLoginError = null
 
-        // Estratégias de login JSON validadas no Postman:
-        // O ERP FlexSmart aceita POST JSON raw: {"username": "...", "password": "..."}
-        // Testes mostram que o ERP pode exigir o query param ?Content-Type=application/json ou header Content-Type.
-        // Tentamos primeiro a URL com o query param conforme documentação da API, e como fallback sem query param.
-        const attempts = [
-          {
-            name: 'JSON com query param ?Content-Type=application/json',
-            url: base + '/login?Content-Type=application/json',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json',
-            },
-            body: JSON.stringify({
-              username: username,
-              password: password,
-            }),
-          },
-          {
-            name: 'JSON padrão em /login (apenas header)',
-            url: base + '/login',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json',
-            },
-            body: JSON.stringify({
-              username: username,
-              password: password,
-            }),
-          },
-          {
-            name: 'JSON com body via data (objeto puro)',
-            url: base + '/login?Content-Type=application/json',
-            headers: {
-              'Content-Type': 'application/json',
-              Accept: 'application/json',
-            },
-            data: {
-              username: username,
-              password: password,
-            },
-          },
-        ]
+        // Chamada de autenticação JSON validada no ERP FlexSmart:
+        // POST https://api.impave.com.br:8443/login com body JSON {"username": "...", "password": "..."}
+        // O $http.send do PocketBase envia headers com content-type: application/json
+        const jsonBodyStr = JSON.stringify({
+          username: username,
+          password: password,
+        })
 
-        const attemptLogs = []
+        const reqConfig = {
+          url: base + '/login',
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+          },
+          body: jsonBodyStr,
+          timeout: 30,
+        }
 
-        for (let i = 0; i < attempts.length; i++) {
-          const attempt = attempts[i]
-          try {
-            const reqConfig = {
-              url: attempt.url,
-              method: 'POST',
-              headers: attempt.headers,
-              timeout: 30,
-            }
-            if (attempt.body !== undefined) {
-              reqConfig.body = attempt.body
-            }
-            if (attempt.data !== undefined) {
-              reqConfig.data = attempt.data
-            }
-            const attemptRes = $http.send(reqConfig)
-            const status = attemptRes ? attemptRes.statusCode : 0
-            const hasJson = attemptRes && attemptRes.json && typeof attemptRes.json === 'object'
-            const keys = hasJson ? Object.keys(attemptRes.json).join(', ') : 'sem json'
-            attemptLogs.push(attempt.name + ': HTTP ' + status + ' [' + keys + ']')
-            console.log(
-              '[FlexSmart] Tentativa ' + (i + 1) + ' (' + attempt.name + ') -> HTTP ' + status,
-            )
-
-            if (attemptRes && attemptRes.statusCode >= 200 && attemptRes.statusCode < 300) {
-              res = attemptRes
-              break
-            } else if (!res) {
-              res = attemptRes
-            }
-          } catch (errAttempt) {
-            lastLoginError = errAttempt
-            attemptLogs.push(attempt.name + ': erro de conexão (' + String(errAttempt) + ')')
-            console.log(
-              '[FlexSmart] Tentativa ' +
-                (i + 1) +
-                ' (' +
-                attempt.name +
-                ') falhou: ' +
-                String(errAttempt),
-            )
-          }
+        try {
+          res = $http.send(reqConfig)
+        } catch (errSend) {
+          lastLoginError = errSend
+          console.log('[FlexSmart] Erro na requisição HTTP de login: ' + String(errSend))
         }
 
         if (!res) {
@@ -229,7 +166,6 @@ routerAdd(
           )
         }
 
-        // Log das chaves presentes na resposta do login
         const keysList =
           res.json && typeof res.json === 'object' ? Object.keys(res.json).join(', ') : 'sem json'
         console.log(
@@ -237,14 +173,13 @@ routerAdd(
         )
 
         if (res.statusCode < 200 || res.statusCode >= 300) {
-          const detail =
-            res.json && (res.json.message || res.json.error)
-              ? ': ' + (res.json.message || res.json.error)
-              : ''
-          const history = attemptLogs.length ? ' (Tentativas: ' + attemptLogs.join(' | ') + ')' : ''
-          throw new Error(
-            'Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail + history,
-          )
+          let detail = ''
+          if (res.json && typeof res.json === 'object' && (res.json.message || res.json.error)) {
+            detail = ': ' + (res.json.message || res.json.error)
+          } else if (res.raw) {
+            detail = ': ' + res.raw.replace(/[\r\n]+/g, ' ').slice(0, 200)
+          }
+          throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
         }
 
         const extracted = extractTokenFromResponse(res.json, res.body)
@@ -462,7 +397,6 @@ routerAdd(
         try {
           // Suporte a campos aninhados ou variações comuns
           const erpCode = pickFirst(item, [
-            'id',
             'codigo',
             'codCliente',
             'idCliente',
@@ -472,8 +406,8 @@ routerAdd(
             'codigoCliente',
             'cd_cliente',
             'cdCliente',
+            'id',
           ])
-
           const docRaw = pickFirst(item, [
             'cnpj',
             'cpf',

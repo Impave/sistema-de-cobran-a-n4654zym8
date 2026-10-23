@@ -133,11 +133,14 @@ routerAdd(
         let res
         let lastLoginError = null
 
-        // Tentativa 1: POST application/json com body raw JSON (formato validado no Postman)
-        try {
-          res = $http.send({
-            url: base + '/login',
-            method: 'POST',
+        // Estratégias de login JSON validadas no Postman:
+        // O ERP FlexSmart aceita POST JSON raw: {"username": "...", "password": "..."}
+        // Testes mostram que o ERP pode exigir o query param ?Content-Type=application/json ou header Content-Type.
+        // Tentamos primeiro a URL com o query param conforme documentação da API, e como fallback sem query param.
+        const attempts = [
+          {
+            name: 'JSON com query param ?Content-Type=application/json',
+            url: base + '/login?Content-Type=application/json',
             headers: {
               'Content-Type': 'application/json',
               Accept: 'application/json',
@@ -146,51 +149,76 @@ routerAdd(
               username: username,
               password: password,
             }),
-            timeout: 30,
-          })
-        } catch (eJson) {
-          lastLoginError = eJson
-        }
+          },
+          {
+            name: 'JSON padrão em /login (apenas header)',
+            url: base + '/login',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            body: JSON.stringify({
+              username: username,
+              password: password,
+            }),
+          },
+          {
+            name: 'JSON com body via data (objeto puro)',
+            url: base + '/login?Content-Type=application/json',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+            },
+            data: {
+              username: username,
+              password: password,
+            },
+          },
+        ]
 
-        // Tentativa 2 (fallback): FormData
-        if (!res || res.statusCode < 200 || res.statusCode >= 300) {
-          try {
-            const fd = new FormData()
-            fd.append('username', username)
-            fd.append('password', password)
-            res = $http.send({
-              url: base + '/login',
-              method: 'POST',
-              body: fd,
-              headers: {
-                Accept: 'application/json',
-              },
-              timeout: 30,
-            })
-          } catch (eFd) {
-            lastLoginError = eFd
-          }
-        }
+        const attemptLogs = []
 
-        // Tentativa 3 (fallback): application/x-www-form-urlencoded
-        if (!res || res.statusCode < 200 || res.statusCode >= 300) {
+        for (let i = 0; i < attempts.length; i++) {
+          const attempt = attempts[i]
           try {
-            res = $http.send({
-              url: base + '/login',
+            const reqConfig = {
+              url: attempt.url,
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                Accept: 'application/json',
-              },
-              body:
-                'username=' +
-                encodeURIComponent(username) +
-                '&password=' +
-                encodeURIComponent(password),
+              headers: attempt.headers,
               timeout: 30,
-            })
-          } catch (eUrl) {
-            lastLoginError = eUrl
+            }
+            if (attempt.body !== undefined) {
+              reqConfig.body = attempt.body
+            }
+            if (attempt.data !== undefined) {
+              reqConfig.data = attempt.data
+            }
+            const attemptRes = $http.send(reqConfig)
+            const status = attemptRes ? attemptRes.statusCode : 0
+            const hasJson = attemptRes && attemptRes.json && typeof attemptRes.json === 'object'
+            const keys = hasJson ? Object.keys(attemptRes.json).join(', ') : 'sem json'
+            attemptLogs.push(attempt.name + ': HTTP ' + status + ' [' + keys + ']')
+            console.log(
+              '[FlexSmart] Tentativa ' + (i + 1) + ' (' + attempt.name + ') -> HTTP ' + status,
+            )
+
+            if (attemptRes && attemptRes.statusCode >= 200 && attemptRes.statusCode < 300) {
+              res = attemptRes
+              break
+            } else if (!res) {
+              res = attemptRes
+            }
+          } catch (errAttempt) {
+            lastLoginError = errAttempt
+            attemptLogs.push(attempt.name + ': erro de conexão (' + String(errAttempt) + ')')
+            console.log(
+              '[FlexSmart] Tentativa ' +
+                (i + 1) +
+                ' (' +
+                attempt.name +
+                ') falhou: ' +
+                String(errAttempt),
+            )
           }
         }
 
@@ -213,7 +241,10 @@ routerAdd(
             res.json && (res.json.message || res.json.error)
               ? ': ' + (res.json.message || res.json.error)
               : ''
-          throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
+          const history = attemptLogs.length ? ' (Tentativas: ' + attemptLogs.join(' | ') + ')' : ''
+          throw new Error(
+            'Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail + history,
+          )
         }
 
         const extracted = extractTokenFromResponse(res.json, res.body)

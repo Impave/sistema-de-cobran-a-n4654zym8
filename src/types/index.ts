@@ -38,6 +38,22 @@ export interface FlexSmartSyncResult {
   updated: number
   errors: number
   success: boolean
+  syncId?: string
+}
+
+export interface FlexSmartSyncStatus {
+  id: string
+  status: 'pending' | 'running' | 'done' | 'error'
+  currentStep: string
+  count: number
+  imported: number
+  createdCount: number
+  updatedCount: number
+  percent: number
+  error?: string
+  startedAt?: string
+  finishedAt?: string
+  created?: string
 }
 
 export interface ChargeRecord {

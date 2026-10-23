@@ -38,6 +38,7 @@ onRecordUpdate((e) => {
         ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
 
       const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+      console.log('[FlexSmart-Diag] Efetuando login em ' + loginUrl + '...')
       const loginRes = $http.send({
         url: loginUrl,
         method: 'POST',
@@ -55,11 +56,13 @@ onRecordUpdate((e) => {
 
       if (!pj || !pj.access_token) {
         e.record.set('error', 'LOGIN_FAILED: ' + String(loginRes.raw).slice(0, 200))
-        return
+        return e.next()
       }
 
       const token = pj.access_token
+      console.log('[FlexSmart-Diag] Login OK! Token: ' + token.slice(0, 8) + '...')
 
+      console.log('[FlexSmart-Diag] Chamando GET /Cliente/getAll com AuthToken...')
       const getAllRes = $http.send({
         url: 'https://api.impave.com.br:8443/Cliente/getAll',
         method: 'GET',
@@ -67,8 +70,10 @@ onRecordUpdate((e) => {
           AuthToken: token,
           Accept: 'application/json',
         },
-        timeout: 90,
+        timeout: 180,
       })
+
+      console.log('[FlexSmart-Diag] /Cliente/getAll HTTP Status: ' + getAllRes.statusCode)
 
       let dados = getAllRes.json
       if (!dados && getAllRes.raw) {
@@ -82,6 +87,19 @@ onRecordUpdate((e) => {
       let sampleData = {}
       if (isArr && dados.length > 0) {
         sampleData = dados[0]
+        console.log('[FlexSmart-Diag] Sucesso! Array direto com ' + count + ' clientes.')
+        console.log(
+          '[FlexSmart-Diag] Exemplo 1º cliente: cdCliente=' +
+            sampleData.cdCliente +
+            ', nmCliente=' +
+            (sampleData.nmCliente || sampleData.nmFantasia),
+        )
+      } else if (!isArr && dados && typeof dados === 'object') {
+        console.log(
+          '[FlexSmart-Diag] Objeto retornado: chaves=[' + Object.keys(dados).join(', ') + ']',
+        )
+      } else {
+        console.log('[FlexSmart-Diag] Resposta inesperada: ' + String(getAllRes.raw).slice(0, 200))
       }
 
       e.record.set('sample', sampleData)
@@ -92,8 +110,10 @@ onRecordUpdate((e) => {
       )
     }
   } catch (err) {
+    console.log('[FlexSmart-Diag] Exceção: ' + String(err))
     e.record.set('error', 'EXC: ' + String(err).slice(0, 200))
   }
+  return e.next()
 }, 'flex_sync')
 
 // 1. Rota para INICIAR a sincronização em segundo plano
@@ -357,6 +377,13 @@ routerAdd(
             ) {
               return [dados]
             }
+          }
+
+          if (res.raw && typeof res.raw === 'string' && res.raw.trim().startsWith('[')) {
+            try {
+              const directParse = JSON.parse(res.raw)
+              if (Array.isArray(directParse)) return directParse
+            } catch (_) {}
           }
 
           throw new Error('Resposta de /Cliente/getAll não continha uma lista de clientes válida')
@@ -782,64 +809,25 @@ routerAdd(
 )
 
 // 4. Rota de teste/diagnóstico para verificar o endpoint /Cliente/getAll
-routerAdd(
-  'GET',
-  '/backend/v1/flexsmart/test-get-all',
-  (e) => {
-    try {
-      console.log('[FlexSmart-TestGetAll] Chamando /Cliente/getAll...')
-      function getTestToken() {
-        const username =
-          $os.getenv('FLEXSMART_USERNAME') ||
-          ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
-        const password =
-          $os.getenv('FLEXSMART_PASSWORD') ||
-          ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
+routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
+  try {
+    console.log('[FlexSmart-TestGetAll] Chamando /Cliente/getAll...')
+    function getTestToken() {
+      const username =
+        $os.getenv('FLEXSMART_USERNAME') ||
+        ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
+      const password =
+        $os.getenv('FLEXSMART_PASSWORD') ||
+        ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
 
-        const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-        const res = $http.send({
-          url: loginUrl,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: username, password: password }),
-          timeout: 30,
-        })
-
-        let parsed = res.json
-        if (!parsed && res.raw) {
-          try {
-            parsed = JSON.parse(res.raw)
-          } catch (_) {}
-        }
-        if (parsed && parsed.access_token) {
-          return parsed.access_token
-        }
-        throw new Error('Falha no login: HTTP ' + res.statusCode + ' ' + (res.raw || ''))
-      }
-
-      const rawBase =
-        $os.getenv('FLEXSMART_BASE_URL') ||
-        ($secrets.has('FLEXSMART_BASE_URL') ? $secrets.get('FLEXSMART_BASE_URL') : '') ||
-        'https://api.impave.com.br:8443'
-      const base = rawBase.replace(/\/+$/, '')
-      const token = getTestToken()
-
-      const targetUrl = base + '/Cliente/getAll'
-      console.log(
-        '[FlexSmart-TestGetAll] URL: ' + targetUrl + ' com token: ' + token.slice(0, 8) + '...',
-      )
-
+      const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
       const res = $http.send({
-        url: targetUrl,
-        method: 'GET',
-        headers: {
-          AuthToken: token,
-          Accept: 'application/json',
-        },
-        timeout: 180,
+        url: loginUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+        timeout: 30,
       })
-
-      console.log('[FlexSmart-TestGetAll] HTTP Status: ' + res.statusCode)
 
       let parsed = res.json
       if (!parsed && res.raw) {
@@ -847,46 +835,80 @@ routerAdd(
           parsed = JSON.parse(res.raw)
         } catch (_) {}
       }
-
-      const isArray = Array.isArray(parsed)
-      const count = isArray
-        ? parsed.length
-        : parsed && typeof parsed === 'object'
-          ? Object.keys(parsed).length
-          : 0
-      const firstItem = isArray && parsed.length > 0 ? parsed[0] : null
-      const firstItemKeys = firstItem ? Object.keys(firstItem) : []
-
-      console.log(
-        '[FlexSmart-TestGetAll] Resposta: isArray=' +
-          isArray +
-          ', count=' +
-          count +
-          ', keys 1º item=[' +
-          firstItemKeys.slice(0, 15).join(', ') +
-          ']',
-      )
-
-      return e.json(200, {
-        success: true,
-        statusCode: res.statusCode,
-        isArray: isArray,
-        count: count,
-        firstItemKeys: firstItemKeys,
-        firstItemSample: firstItem,
-        rawSnippet: String(res.raw || '').slice(0, 500),
-      })
-    } catch (err) {
-      const msg = err && err.message ? err.message : String(err)
-      console.log('[FlexSmart-TestGetAll] Erro: ' + msg)
-      return e.json(500, {
-        success: false,
-        error: msg,
-      })
+      if (parsed && parsed.access_token) {
+        return parsed.access_token
+      }
+      throw new Error('Falha no login: HTTP ' + res.statusCode + ' ' + (res.raw || ''))
     }
-  },
-  $apis.requireAuth(),
-)
+
+    const rawBase =
+      $os.getenv('FLEXSMART_BASE_URL') ||
+      ($secrets.has('FLEXSMART_BASE_URL') ? $secrets.get('FLEXSMART_BASE_URL') : '') ||
+      'https://api.impave.com.br:8443'
+    const base = rawBase.replace(/\/+$/, '')
+    const token = getTestToken()
+
+    const targetUrl = base + '/Cliente/getAll'
+    console.log(
+      '[FlexSmart-TestGetAll] URL: ' + targetUrl + ' com token: ' + token.slice(0, 8) + '...',
+    )
+
+    const res = $http.send({
+      url: targetUrl,
+      method: 'GET',
+      headers: {
+        AuthToken: token,
+        Accept: 'application/json',
+      },
+      timeout: 180,
+    })
+
+    console.log('[FlexSmart-TestGetAll] HTTP Status: ' + res.statusCode)
+
+    let parsed = res.json
+    if (!parsed && res.raw) {
+      try {
+        parsed = JSON.parse(res.raw)
+      } catch (_) {}
+    }
+
+    const isArray = Array.isArray(parsed)
+    const count = isArray
+      ? parsed.length
+      : parsed && typeof parsed === 'object'
+        ? Object.keys(parsed).length
+        : 0
+    const firstItem = isArray && parsed.length > 0 ? parsed[0] : null
+    const firstItemKeys = firstItem ? Object.keys(firstItem) : []
+
+    console.log(
+      '[FlexSmart-TestGetAll] Resposta: isArray=' +
+        isArray +
+        ', count=' +
+        count +
+        ', keys 1º item=[' +
+        firstItemKeys.slice(0, 15).join(', ') +
+        ']',
+    )
+
+    return e.json(200, {
+      success: true,
+      statusCode: res.statusCode,
+      isArray: isArray,
+      count: count,
+      firstItemKeys: firstItemKeys,
+      firstItemSample: firstItem,
+      rawSnippet: String(res.raw || '').slice(0, 500),
+    })
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err)
+    console.log('[FlexSmart-TestGetAll] Erro: ' + msg)
+    return e.json(500, {
+      success: false,
+      error: msg,
+    })
+  }
+})
 
 // 5. Rota de teste/diagnóstico de login (Passo 1)
 routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {

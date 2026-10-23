@@ -1,5 +1,10 @@
 import pb from '@/lib/pocketbase/client'
-import type { ClientRecord, ClientFormData, FlexSmartSyncResult } from '@/types'
+import type {
+  ClientRecord,
+  ClientFormData,
+  FlexSmartSyncResult,
+  FlexSmartSyncStatus,
+} from '@/types'
 
 export const clientsService = {
   async getAll(): Promise<ClientRecord[]> {
@@ -47,10 +52,44 @@ export const clientsService = {
     return await pb.collection('clients').delete(id)
   },
 
-  async syncFlexSmart(): Promise<FlexSmartSyncResult> {
-    return await pb.send<FlexSmartSyncResult>('/backend/v1/flexsmart/sync', {
+  async startFlexSmartSync(): Promise<{
+    success: boolean
+    syncId: string
+    status: string
+    message: string
+  }> {
+    const res = await pb.send<{
+      success: boolean
+      syncId: string
+      status: string
+      message: string
+    }>('/backend/v1/flexsmart/start-sync', {
       method: 'POST',
-      requestKey: null,
     })
+    return res
+  },
+
+  async getFlexSmartSyncStatus(syncId: string): Promise<FlexSmartSyncStatus> {
+    const res = await pb.send<FlexSmartSyncStatus>(`/backend/v1/flexsmart/sync-status/${syncId}`, {
+      method: 'GET',
+    })
+    return res
+  },
+
+  async getLastFlexSmartSync(): Promise<{ lastSync: FlexSmartSyncStatus | null }> {
+    const res = await pb.send<{ lastSync: FlexSmartSyncStatus | null }>(
+      '/backend/v1/flexsmart/last-sync',
+      {
+        method: 'GET',
+      },
+    )
+    return res
+  },
+
+  async syncFlexSmart(): Promise<FlexSmartSyncResult> {
+    const res = await pb.send<FlexSmartSyncResult>('/backend/v1/flexsmart/sync', {
+      method: 'POST',
+    })
+    return res
   },
 }

@@ -144,9 +144,14 @@ export default function Layout() {
             <CreditCard className="w-5 h-5" />
           </div>
           <div className="hidden lg:flex flex-col">
-            <span className="font-bold text-lg text-slate-900 tracking-tight leading-tight">
-              CobrançaPro
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-bold text-lg text-slate-900 tracking-tight leading-tight">
+                CobrançaPro
+              </span>
+              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold border border-slate-200">
+                v0.0.21
+              </span>
+            </div>
             <span className="text-[11px] text-slate-400 font-medium">Gestão Financeira</span>
           </div>
         </div>

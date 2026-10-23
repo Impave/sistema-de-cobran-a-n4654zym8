@@ -9,7 +9,9 @@ import {
   Plus,
   Loader2,
   TrendingUp,
+  Tag,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import {
   ResponsiveContainer,
   PieChart,
@@ -211,7 +213,17 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Dashboard</h1>
+            <Badge
+              variant="outline"
+              className="bg-emerald-50 text-emerald-700 border-emerald-200 text-xs px-2 py-0.5 font-medium inline-flex items-center gap-1 shadow-2xs"
+              title="Versão ativa da aplicação"
+            >
+              <Tag className="w-3 h-3 text-emerald-600" />
+              v0.0.21
+            </Badge>
+          </div>
           <p className="text-sm text-slate-500 mt-0.5">
             Visão geral das suas cobranças •{' '}
             <span className="capitalize">{formatDateExtendedBR()}</span>

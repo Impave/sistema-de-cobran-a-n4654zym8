@@ -14,9 +14,12 @@ import {
   AlertTriangle,
   RefreshCw,
   Building2,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -33,7 +36,7 @@ import { clientsService } from '@/services/clients'
 import { chargesService } from '@/services/charges'
 import { useRealtime } from '@/hooks/use-realtime'
 import { useToast } from '@/hooks/use-toast'
-import type { ClientRecord, ClientFormData, ChargeRecord } from '@/types'
+import type { ClientRecord, ClientFormData, ChargeRecord, FlexSmartSyncStatus } from '@/types'
 import { formatDocument, formatPhone } from '@/lib/formatters'
 import { getErrorMessage } from '@/lib/pocketbase/errors'
 
@@ -64,6 +67,7 @@ export default function ClientsPage() {
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
   const [syncLoading, setSyncLoading] = useState(false)
+  const [activeSync, setActiveSync] = useState<FlexSmartSyncStatus | null>(null)
 
   const { toast } = useToast()
 

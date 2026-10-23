@@ -274,6 +274,21 @@ routerAdd(
           } catch (_) {}
         }
 
+        const isDirectArray = Array.isArray(dados)
+        const keysFound =
+          dados && typeof dados === 'object' && !isDirectArray
+            ? Object.keys(dados).join(', ')
+            : 'none'
+        console.log(
+          '[FlexSmart] /Cliente/getAll HTTP ' +
+            res.statusCode +
+            ' | tipo: ' +
+            (isDirectArray ? 'array direto' : typeof dados) +
+            ' | chaves do objeto: [' +
+            keysFound +
+            ']',
+        )
+
         if (Array.isArray(dados)) {
           return dados
         }

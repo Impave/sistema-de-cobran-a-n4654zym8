@@ -40,7 +40,11 @@ export const clientsService = {
       const cleanDigits = q.replace(/\D/g, '')
       // Escapa aspas para segurança no PocketBase filter
       const safeQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-      const conditions: string[] = [`name ~ "${safeQ}"`, `email ~ "${safeQ}"`]
+      const conditions: string[] = [
+        `name ~ "${safeQ}"`,
+        `email ~ "${safeQ}"`,
+        `erp_code ~ "${safeQ}"`,
+      ]
       if (cleanDigits) {
         conditions.push(`document ~ "${cleanDigits}"`)
         conditions.push(`phone ~ "${cleanDigits}"`)
@@ -85,22 +89,27 @@ export const clientsService = {
     // Remove formatação do documento
     const cleanDoc = data.document ? data.document.replace(/\D/g, '') : ''
     const cleanPhone = data.phone ? data.phone.replace(/\D/g, '') : ''
+    const cleanErpCode = data.erp_code ? data.erp_code.trim() : ''
 
     return await pb.collection('clients').create<ClientRecord>({
       ...data,
       owner: user.id,
       document: cleanDoc,
       phone: cleanPhone,
+      erp_code: cleanErpCode || undefined,
     })
   },
 
   async update(id: string, data: Partial<ClientFormData>): Promise<ClientRecord> {
     const payload = { ...data }
     if (payload.document !== undefined) {
-      payload.document = payload.document.replace(/\D/g, '')
+      payload.document = payload.document ? payload.document.replace(/\D/g, '') : ''
     }
     if (payload.phone !== undefined) {
-      payload.phone = payload.phone.replace(/\D/g, '')
+      payload.phone = payload.phone ? payload.phone.replace(/\D/g, '') : ''
+    }
+    if (payload.erp_code !== undefined) {
+      payload.erp_code = payload.erp_code ? payload.erp_code.trim() : ''
     }
     return await pb.collection('clients').update<ClientRecord>(id, payload)
   },

@@ -89,6 +89,7 @@ export default function ClientsPage() {
     address: '',
     city: '',
     state: '',
+    erp_code: '',
   })
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -170,6 +171,7 @@ export default function ClientsPage() {
         address: '',
         city: '',
         state: '',
+        erp_code: '',
       })
       setIsFormOpen(true)
     } else if (editId && clients.length > 0) {
@@ -184,6 +186,7 @@ export default function ClientsPage() {
           address: found.address || '',
           city: found.city || '',
           state: found.state || '',
+          erp_code: found.erp_code || '',
         })
         setIsFormOpen(true)
       }
@@ -200,6 +203,7 @@ export default function ClientsPage() {
       address: '',
       city: '',
       state: '',
+      erp_code: '',
     })
     setFormError(null)
     setIsFormOpen(true)
@@ -216,6 +220,7 @@ export default function ClientsPage() {
       address: client.address || '',
       city: client.city || '',
       state: client.state || '',
+      erp_code: client.erp_code || '',
     })
     setFormError(null)
     setIsFormOpen(true)
@@ -1023,12 +1028,13 @@ export default function ClientsPage() {
               <table className="w-full text-left text-xs">
                 <thead className="bg-slate-50/75 border-b border-slate-200 text-slate-500 uppercase tracking-wider font-semibold">
                   <tr>
-                    <th className="py-3.5 px-6">Cliente</th>
-                    <th className="py-3.5 px-6">Documento</th>
-                    <th className="py-3.5 px-6">Telefone</th>
-                    <th className="py-3.5 px-6">Localização</th>
-                    <th className="py-3.5 px-6 text-center">Cobranças</th>
-                    <th className="py-3.5 px-6 text-right">Ações</th>
+                    <th className="py-3.5 px-4">Código</th>
+                    <th className="py-3.5 px-5">Cliente</th>
+                    <th className="py-3.5 px-5">Documento</th>
+                    <th className="py-3.5 px-5">Telefone</th>
+                    <th className="py-3.5 px-5">Localização</th>
+                    <th className="py-3.5 px-4 text-center">Cobranças</th>
+                    <th className="py-3.5 px-5 text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -1043,25 +1049,26 @@ export default function ClientsPage() {
                             : 'hover:bg-slate-100/60 transition-colors'
                         }
                       >
-                        <td className="py-3.5 px-6">
+                        <td className="py-3.5 px-4 whitespace-nowrap">
+                          {client.erp_code ? (
+                            <span
+                              className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-50/80 text-indigo-700 border border-indigo-200/70"
+                              title={`Código ERP (cdCliente): ${client.erp_code}`}
+                            >
+                              <Building2 className="w-3 h-3 text-indigo-500 shrink-0" />
+                              {client.erp_code}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400 font-mono text-xs">-</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-5">
                           <div className="flex items-center gap-3">
                             <ClientAvatar name={client.name} size="md" />
                             <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <p className="font-semibold text-slate-900 text-sm truncate">
-                                  {client.name}
-                                </p>
-                                {client.erp_code && (
-                                  <Badge
-                                    variant="outline"
-                                    className="bg-indigo-50/70 text-indigo-700 border-indigo-200/80 text-[10px] px-1.5 py-0 h-4 font-semibold tracking-wide shrink-0 inline-flex items-center gap-0.5"
-                                    title={`Cliente sincronizado via FlexSmart ERP (Cód: ${client.erp_code})`}
-                                  >
-                                    <Building2 className="w-2.5 h-2.5 text-indigo-500" />
-                                    ERP
-                                  </Badge>
-                                )}
-                              </div>
+                              <p className="font-semibold text-slate-900 text-sm truncate">
+                                {client.name}
+                              </p>
                               {client.email ? (
                                 <p className="text-slate-500 text-xs truncate flex items-center gap-1 mt-0.5">
                                   <Mail className="w-3 h-3 text-slate-400 inline shrink-0" />
@@ -1073,12 +1080,12 @@ export default function ClientsPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="py-3.5 px-6">
+                        <td className="py-3.5 px-5">
                           <span className="font-mono text-slate-700">
                             {formatDocument(client.document)}
                           </span>
                         </td>
-                        <td className="py-3.5 px-6 text-slate-600">
+                        <td className="py-3.5 px-5 text-slate-600">
                           {client.phone ? (
                             <span className="flex items-center gap-1.5">
                               <Phone className="w-3.5 h-3.5 text-slate-400" />
@@ -1088,7 +1095,7 @@ export default function ClientsPage() {
                             <span className="text-slate-400">-</span>
                           )}
                         </td>
-                        <td className="py-3.5 px-6 text-slate-600">
+                        <td className="py-3.5 px-5 text-slate-600">
                           {client.city || client.state ? (
                             <span className="flex items-center gap-1 truncate max-w-[150px]">
                               <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -1098,13 +1105,13 @@ export default function ClientsPage() {
                             <span className="text-slate-400">-</span>
                           )}
                         </td>
-                        <td className="py-3.5 px-6 text-center">
+                        <td className="py-3.5 px-4 text-center">
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200">
                             <Receipt className="w-3 h-3 text-slate-500" />
                             {count}
                           </span>
                         </td>
-                        <td className="py-3.5 px-6 text-right">
+                        <td className="py-3.5 px-5 text-right">
                           <div className="flex items-center justify-end gap-1">
                             <Button
                               variant="ghost"
@@ -1145,19 +1152,7 @@ export default function ClientsPage() {
                       <div className="flex items-center gap-3">
                         <ClientAvatar name={client.name} size="md" />
                         <div>
-                          <div className="flex items-center gap-1.5">
-                            <h4 className="font-semibold text-slate-900 text-sm">{client.name}</h4>
-                            {client.erp_code && (
-                              <Badge
-                                variant="outline"
-                                className="bg-indigo-50/70 text-indigo-700 border-indigo-200/80 text-[10px] px-1.5 py-0 h-4 font-semibold tracking-wide shrink-0 inline-flex items-center gap-0.5"
-                                title={`Cliente sincronizado via FlexSmart ERP (Cód: ${client.erp_code})`}
-                              >
-                                <Building2 className="w-2.5 h-2.5 text-indigo-500" />
-                                ERP
-                              </Badge>
-                            )}
-                          </div>
+                          <h4 className="font-semibold text-slate-900 text-sm">{client.name}</h4>
                           <p className="text-xs text-slate-500">{client.email || 'Sem email'}</p>
                         </div>
                       </div>
@@ -1167,7 +1162,17 @@ export default function ClientsPage() {
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-xs pt-2 border-t border-slate-100">
+                    <div className="grid grid-cols-3 gap-2 text-xs pt-2 border-t border-slate-100">
+                      <div>
+                        <span className="text-slate-400 block text-[11px]">Código</span>
+                        {client.erp_code ? (
+                          <span className="font-mono font-semibold text-indigo-700">
+                            #{client.erp_code}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </div>
                       <div>
                         <span className="text-slate-400 block text-[11px]">Documento</span>
                         <span className="font-mono text-slate-700">
@@ -1317,18 +1322,33 @@ export default function ClientsPage() {
           )}
 
           <form onSubmit={handleSubmitForm} className="space-y-4 pt-2">
-            <div>
-              <Label htmlFor="c-name" className="text-xs font-semibold text-slate-700">
-                Nome completo <span className="text-red-500">*</span>
-              </Label>
-              <Input
-                id="c-name"
-                value={formData.name}
-                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                placeholder="Ex: Maria Oliveira ou Empresa XYZ"
-                className="mt-1 text-sm"
-                required
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2">
+                <Label htmlFor="c-name" className="text-xs font-semibold text-slate-700">
+                  Nome completo <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="c-name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  placeholder="Ex: Maria Oliveira ou Empresa XYZ"
+                  className="mt-1 text-sm"
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="c-erp-code" className="text-xs font-semibold text-slate-700">
+                  Código ERP (cdCliente)
+                </Label>
+                <Input
+                  id="c-erp-code"
+                  value={formData.erp_code || ''}
+                  onChange={(e) => setFormData({ ...formData, erp_code: e.target.value })}
+                  placeholder="Ex: 20445"
+                  className="mt-1 text-sm font-mono"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

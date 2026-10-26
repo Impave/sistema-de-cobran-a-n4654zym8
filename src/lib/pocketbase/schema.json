@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-26T12:03:14.493Z",
+  "generatedAt": "2026-10-26T12:40:54.948Z",
   "collections": [
     {
       "name": "users",
@@ -306,6 +306,18 @@
         {
           "name": "current_step",
           "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "sync_date",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "is_full_sync",
+          "type": "bool",
           "required": false,
           "system": false
         }

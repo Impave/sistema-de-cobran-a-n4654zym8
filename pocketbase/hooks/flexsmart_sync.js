@@ -1,17 +1,19 @@
 // flexsmart_sync.js - Integração com ERP FlexSmart
 // 1. POST /login com username/password dos segredos -> access_token
 // 2. Cache em memória do token ($app.store()) com re-login automático em caso de 401/403
-// 3. GET /Cliente/getAll com header AuthToken: <access_token>
-// 4. Mapeamento e deduplicação (erp_code e CPF/CNPJ) na coleção clients para o usuário autenticado
-// 5. Execução em segundo plano com gravação de progresso em lotes na coleção `flex_sync`
-// 6. Rotas:
-//    - POST /backend/v1/flexsmart/start-sync -> dispara o job assíncrono e retorna o id do registro em flex_sync
+// 3. GET /Cliente/getByDtAtz?data=DD/MM/AAAA com header AuthToken: <access_token>
+// 4. Sincronização incremental: busca clientes alterados desde a última sincronização bem-sucedida
+//    ou desde data base (01/01/2000) quando for importação completa ("do zero").
+// 5. Mapeamento e deduplicação (erp_code e CPF/CNPJ) na coleção clients para o usuário autenticado
+// 6. Execução em segundo plano com gravação de progresso em lotes na coleção `flex_sync`
+// 7. Rotas:
+//    - POST /backend/v1/flexsmart/start-sync -> dispara o job assíncrono (aceita { fullSync: boolean, date: string })
 //    - POST /backend/v1/flexsmart/cancel-sync/{id} -> solicita interrupção do job assíncrono
 //    - GET  /backend/v1/flexsmart/sync-status/{id} -> retorna o status do job (total, processados, criados, atualizados, erros)
 //    - GET  /backend/v1/flexsmart/last-sync -> retorna o último job de sincronização do usuário
-//    - POST /backend/v1/flexsmart/sync -> rota síncrona mantida por retrocompatibilidade
+//    - GET  /backend/v1/flexsmart/test-by-date -> teste de diagnóstico para verificar resposta de /Cliente/getByDtAtz
 //    - POST /backend/v1/flexsmart/test-login -> teste de login
-//    - GET  /backend/v1/flexsmart/test-get-all -> teste de diagnóstico para verificar resposta de /Cliente/getAll
+//    - POST /backend/v1/flexsmart/sync -> rota síncrona mantida por retrocompatibilidade
 //
 // NOTA CRÍTICA: Sincronização estritamente MANUAL a pedido do usuário (sem cron / sem execução automática).
 // Jamais registrar nenhum cron/automação para o FlexSmart.
@@ -39,7 +41,68 @@ routerAdd(
         return e.json(401, { error: 'Usuário não autenticado' })
       }
 
-      // Limpa/finaliza jobs antigos que ficaram travados (running, pending, cancelling) sem finalização
+      function formatCurrentDateBR() {
+        const d = new Date()
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        return day + '/' + month + '/' + year
+      }
+
+      function formatDateToBR(dateObj) {
+        if (!dateObj) return ''
+        const d = new Date(dateObj)
+        if (isNaN(d.getTime())) return ''
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        return day + '/' + month + '/' + year
+      }
+
+      // Lê parâmetros enviados no corpo se houver (fullSync: boolean, date: string)
+      let reqBody = {}
+      try {
+        const rawBody = e.request.body ? e.request.body.readAll() : null
+        if (rawBody && rawBody.length > 0) {
+          reqBody = JSON.parse(String(rawBody))
+        }
+      } catch (_) {}
+
+      const isFullSyncRequested = reqBody.fullSync === true
+
+      let targetDate = ''
+      if (reqBody.date && typeof reqBody.date === 'string' && reqBody.date.trim()) {
+        targetDate = reqBody.date.trim()
+      } else if (isFullSyncRequested) {
+        targetDate = '01/01/2000'
+      } else {
+        try {
+          const lastSuccessful = $app.findRecordsByFilter(
+            'flex_sync',
+            'owner = {:owner} && status = "done"',
+            '-created',
+            1,
+            0,
+            { owner: ownerId },
+          )
+          if (lastSuccessful.length > 0) {
+            const rec = lastSuccessful[0]
+            const savedSyncDate = rec.getString('sync_date')
+            if (savedSyncDate && savedSyncDate.length >= 8) {
+              targetDate = savedSyncDate
+            } else {
+              const startedAt = rec.getString('started_at') || rec.getString('created')
+              targetDate = formatDateToBR(startedAt)
+            }
+          }
+        } catch (_) {}
+
+        if (!targetDate) {
+          targetDate = '01/01/2000'
+        }
+      }
+
+      // Limpa/finaliza jobs antigos que ficaram travados
       try {
         const staleSyncs = $app.findRecordsByFilter(
           'flex_sync',
@@ -56,27 +119,12 @@ routerAdd(
           const ageMs = nowTime - new Date(updatedStr).getTime()
           const st = stale.getString('status')
 
-          // Se o job ficou em cancelling, pending, ou running por mais de 2 minutos (120s),
-          // considera travado silenciosamente e finaliza como cancelled para não bloquear o usuário
-          if (st === 'cancelling') {
+          if (st === 'cancelling' || ageMs > 60000 || st === 'pending' || st === 'running') {
             stale.set('status', 'cancelled')
-            stale.set(
-              'current_step',
-              'Interrupção concluída (finalizado pelo sistema ao iniciar novo processo).',
-            )
+            stale.set('current_step', 'Sessão anterior finalizada ao iniciar novo processo.')
             stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(stale)
-            console.log('[FlexSmart] Job antigo em cancelling marcado como cancelled: ' + stale.id)
-          } else if (ageMs > 120000 || st === 'pending' || st === 'running') {
-            // Qualquer job em running há mais de 120s sem alteração foi terminado silenciosamente
-            stale.set('status', 'cancelled')
-            stale.set(
-              'current_step',
-              'Sessão anterior interrompida (o processo anterior foi finalizado pelo servidor por excesso de memória/tempo ao baixar o arquivo de 74 MB).',
-            )
-            stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(stale)
-            console.log('[FlexSmart] Job antigo abandonado finalizado: ' + stale.id)
+            console.log('[FlexSmart] Job antigo finalizado: ' + stale.id)
           }
         }
       } catch (staleErr) {
@@ -92,17 +140,24 @@ routerAdd(
       syncRec.set('imported', 0)
       syncRec.set('created_count', 0)
       syncRec.set('updated_count', 0)
-      syncRec.set('current_step', 'Iniciando sincronização...')
+      syncRec.set('sync_date', targetDate)
+      syncRec.set('is_full_sync', isFullSyncRequested || targetDate === '01/01/2000')
+      syncRec.set('current_step', 'Iniciando sincronização (desde ' + targetDate + ')...')
       $app.save(syncRec)
 
       const syncId = syncRec.id
       console.log(
-        '[FlexSmart] Novo job de sincronização criado: ' + syncId + ' para owner ' + ownerId,
+        '[FlexSmart] Novo job de sincronização criado: ' +
+          syncId +
+          ' para owner ' +
+          ownerId +
+          ' com data=' +
+          targetDate,
       )
 
       // Executa o processamento assíncrono em segundo plano
       setTimeout(() => {
-        function getToken(forceRefresh) {
+        function getFlexSmartToken(forceRefresh) {
           const username =
             $os.getenv('FLEXSMART_USERNAME') ||
             ($secrets && $secrets.has('FLEXSMART_USERNAME')
@@ -138,7 +193,7 @@ routerAdd(
           }
 
           const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-          console.log('[FlexSmart-Async] Realizando login estrito em ' + loginUrl)
+          console.log('[FlexSmart-Async] Realizando login em ' + loginUrl)
 
           const jsonBodyStr = JSON.stringify({
             username: username,
@@ -205,10 +260,7 @@ routerAdd(
           return token
         }
 
-        // Função de busca de clientes no ERP com suporte a respostas de centenas de MB
-        // Evita duplicação desnecessária de memória: utiliza res.json se o engine Go já fez o unmarshal
-        // ou extrai o array sem parsing redundante.
-        function fetchERP(forceRelogin, jobProgressUpdate) {
+        function fetchERPByDate(searchDate, forceRelogin, jobProgressUpdate) {
           const rawBase =
             $os.getenv('FLEXSMART_BASE_URL') ||
             ($secrets && $secrets.has('FLEXSMART_BASE_URL')
@@ -216,15 +268,16 @@ routerAdd(
               : '') ||
             'https://api.impave.com.br:8443'
           const base = rawBase.replace(/\/+$/, '')
-          const token = getToken(forceRelogin)
+          const token = getFlexSmartToken(forceRelogin)
 
           if (jobProgressUpdate) {
-            jobProgressUpdate(
-              'Baixando dados de clientes do ERP FlexSmart (pode levar alguns instantes)...',
-            )
+            jobProgressUpdate('Buscando clientes alterados desde ' + searchDate + ' no ERP...')
           }
           console.log(
-            '[FlexSmart-Async] Buscando clientes em ' + base + '/Cliente/getAll (timeout 300s)...',
+            '[FlexSmart-Async] Buscando clientes em ' +
+              base +
+              '/Cliente/getByDtAtz?data=' +
+              encodeURIComponent(searchDate),
           )
 
           let res = null
@@ -232,13 +285,13 @@ routerAdd(
           const startTime = Date.now()
           try {
             res = $http.send({
-              url: base + '/Cliente/getAll',
+              url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(searchDate),
               method: 'GET',
               headers: {
                 AuthToken: token,
                 Accept: 'application/json',
               },
-              timeout: 300, // 5 minutos de timeout para respostas gigantescas
+              timeout: 60,
             })
           } catch (eGet) {
             lastErr = eGet
@@ -246,12 +299,12 @@ routerAdd(
 
           const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1)
           console.log(
-            '[FlexSmart-Async] Requisição /Cliente/getAll concluída em ' + elapsedSec + 's',
+            '[FlexSmart-Async] Requisição /Cliente/getByDtAtz concluída em ' + elapsedSec + 's',
           )
 
           if (!res) {
             throw new Error(
-              'Falha ao conectar no endpoint /Cliente/getAll do FlexSmart após ' +
+              'Falha ao conectar no endpoint /Cliente/getByDtAtz do FlexSmart após ' +
                 elapsedSec +
                 's: ' +
                 (lastErr ? String(lastErr) : 'sem resposta'),
@@ -266,7 +319,7 @@ routerAdd(
                 $app.store().remove('flexsmart_token_time')
               }
             } catch (_) {}
-            return fetchERP(true, jobProgressUpdate)
+            return fetchERPByDate(searchDate, true, jobProgressUpdate)
           }
 
           if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -280,31 +333,22 @@ routerAdd(
           }
 
           if (jobProgressUpdate) {
-            jobProgressUpdate('Processando estrutura de dados recebida do ERP...')
+            jobProgressUpdate('Processando dados recebidos do ERP...')
           }
-
-          // Prioridade 1: se res.json já veio decodificado pelo Go runtime
-          // DOCUMENTAÇÃO DA ESTRATÉGIA DE MEMÓRIA (GOJA / POCKETBASE):
-          // O payload do FlexSmart /Cliente/getAll contém ~74 MB de JSON em texto puro e demorou ~1m36s no Postman.
-          // Quando $http.send conclui o download no Go, `res.json` já contém a estrutura desestruturada pelo runtime Go.
-          // NUNCA chamar `JSON.parse(res.raw)` quando `res.json` estiver disponível, pois isso duplicaria os 74 MB em strings
-          // e objetos JS adicionais no heap do Goja, causando OOM instantâneo.
-          // Se `res.json` não estiver disponível e houver apenas `res.raw`, utilizamos um tokenizer/fatiador de itens
-          // ou parsing direto descartável.
 
           if (Array.isArray(res.json)) {
             console.log(
-              '[FlexSmart-Async] Usando res.json nativo: ' + res.json.length + ' registros.',
+              '[FlexSmart-Async] Array direto em res.json: ' + res.json.length + ' registros.',
             )
             return res.json
           }
 
           if (res.json && typeof res.json === 'object') {
             const candidateKeys = [
+              'dados',
+              'data',
               'clientes',
               'clients',
-              'data',
-              'dados',
               'content',
               'items',
               'resultado',
@@ -344,15 +388,7 @@ routerAdd(
             }
           }
 
-          // Prioridade 2: Se res.json não veio decodificado, realizar o parse de res.raw
           if (res.raw && typeof res.raw === 'string') {
-            const rawLength = res.raw.length
-            console.log(
-              '[FlexSmart-Async] res.json indisponível, realizando parse de res.raw (' +
-                (rawLength / (1024 * 1024)).toFixed(2) +
-                ' MB)...',
-            )
-
             try {
               const parsed = JSON.parse(res.raw)
               if (Array.isArray(parsed)) {
@@ -360,10 +396,10 @@ routerAdd(
               }
               if (parsed && typeof parsed === 'object') {
                 for (const key of [
+                  'dados',
+                  'data',
                   'clientes',
                   'clients',
-                  'data',
-                  'dados',
                   'content',
                   'items',
                   'lista',
@@ -374,6 +410,9 @@ routerAdd(
                 for (const k of Object.keys(parsed)) {
                   if (Array.isArray(parsed[k])) return parsed[k]
                 }
+                if (parsed.cdCliente || parsed.nmCliente || parsed.cnpjCpf) {
+                  return [parsed]
+                }
               }
             } catch (pErr) {
               console.log('[FlexSmart-Async] JSON.parse(res.raw) falhou: ' + String(pErr))
@@ -381,13 +420,26 @@ routerAdd(
             }
           }
 
-          throw new Error('Resposta de /Cliente/getAll não continha uma lista de clientes válida')
+          return []
         }
 
         function pickFirst(obj, keys) {
+          if (!obj || typeof obj !== 'object') return ''
           for (const k of keys) {
             const val = obj[k]
             if (val !== undefined && val !== null) {
+              if (typeof val === 'object') {
+                const nestedName = pickFirst(val, [
+                  'nmCidade',
+                  'nome',
+                  'dsCidade',
+                  'dsBairro',
+                  'nmBairro',
+                  'uf',
+                  'sgUf',
+                ])
+                if (nestedName) return nestedName
+              }
               const s = String(val).trim()
               if (s !== '') return s
             }
@@ -408,32 +460,39 @@ routerAdd(
         }
 
         try {
-          // Verifica se já foi cancelado antes de iniciar
-          try {
-            jobRec = $app.findRecordById('flex_sync', syncId)
-            const st = jobRec.getString('status')
-            if (st === 'cancelling' || st === 'cancelled') {
-              jobRec.set('status', 'cancelled')
-              jobRec.set('current_step', 'Importação cancelada antes de iniciar.')
-              jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-              $app.save(jobRec)
-              console.log('[FlexSmart-Async ' + syncId + '] Cancelado antes do início.')
-              return
-            }
-          } catch (_) {}
+          const st = jobRec.getString('status')
+          if (st === 'cancelling' || st === 'cancelled') {
+            jobRec.set('status', 'cancelled')
+            jobRec.set('current_step', 'Importação cancelada antes de iniciar.')
+            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(jobRec)
+            console.log('[FlexSmart-Async ' + syncId + '] Cancelado antes do início.')
+            return
+          }
 
           jobRec.set('status', 'running')
-          jobRec.set('current_step', 'Conectando ao ERP FlexSmart...')
+          jobRec.set(
+            'current_step',
+            'Buscando clientes alterados desde ' + targetDate + ' no ERP...',
+          )
           jobRec.set('started_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(jobRec)
 
-          console.log('[FlexSmart-Async ' + syncId + '] Chamando /Cliente/getAll...')
-          const erpList = fetchERP(false, (stepText) => {
+          console.log(
+            '[FlexSmart-Async ' +
+              syncId +
+              '] Chamando /Cliente/getByDtAtz?data=' +
+              targetDate +
+              '...',
+          )
+
+          const erpList = fetchERPByDate(targetDate, false, (stepText) => {
             try {
               jobRec.set('current_step', stepText)
               $app.save(jobRec)
             } catch (_) {}
           })
+
           const totalErp = erpList.length
           console.log('[FlexSmart-Async ' + syncId + '] Total recebido do ERP: ' + totalErp)
 
@@ -447,6 +506,22 @@ routerAdd(
           jobRec.set('imported', 0)
           jobRec.set('created_count', 0)
           jobRec.set('updated_count', 0)
+
+          if (totalErp === 0) {
+            jobRec.set('status', 'done')
+            jobRec.set('current_step', 'Nenhum cliente alterado desde ' + targetDate + '.')
+            jobRec.set('sync_date', formatCurrentDateBR())
+            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(jobRec)
+            console.log(
+              '[FlexSmart-Async ' +
+                syncId +
+                '] Concluído: 0 clientes alterados na data ' +
+                targetDate,
+            )
+            return
+          }
+
           jobRec.set('current_step', 'Processando ' + totalErp + ' clientes...')
           $app.save(jobRec)
 
@@ -474,12 +549,9 @@ routerAdd(
           let updatedCount = 0
           let errorCount = 0
           let wasCancelled = false
-          // Aumentamos o lote para atualizar o banco de forma eficiente
-          const BATCH_SIZE = 25
+          const BATCH_SIZE = 20
 
-          // Otimização de memória: processa item e limpa a referência imediatamente no array para permitir GC
           for (let i = 0; i < totalErp; i++) {
-            // ANTES de cada lote, reler o status do registro no banco para checar solicitação de cancelamento
             if (i % BATCH_SIZE === 0) {
               try {
                 const checkRec = $app.findRecordById('flex_sync', syncId)
@@ -489,22 +561,16 @@ routerAdd(
                     '[FlexSmart-Async ' +
                       syncId +
                       '] Interrupção solicitada detectada no índice ' +
-                      i +
-                      '. Finalizando como cancelado imediatamente.',
+                      i,
                   )
                   wasCancelled = true
                   jobRec = checkRec
                   break
                 }
-              } catch (chkErr) {
-                console.log(
-                  '[FlexSmart-Async ' + syncId + '] Erro ao reler status: ' + String(chkErr),
-                )
-              }
+              } catch (_) {}
             }
 
             const item = erpList[i]
-            // Libera a referência no array para auxiliar o Garbage Collector
             erpList[i] = null
 
             if (!item || typeof item !== 'object') {
@@ -580,7 +646,14 @@ routerAdd(
                 'complemento',
                 'dsComplemento',
               ])
-              const bairro = pickFirst(item, ['bairro', 'dsBairro'])
+
+              let bairro = ''
+              if (item.bairro && typeof item.bairro === 'object') {
+                bairro = pickFirst(item.bairro, ['nmBairro', 'dsBairro', 'nome'])
+              }
+              if (!bairro) {
+                bairro = pickFirst(item, ['bairro', 'dsBairro', 'nmBairro'])
+              }
 
               let fullAddressParts = []
               if (logradouro) {
@@ -594,24 +667,33 @@ routerAdd(
               }
               const address = fullAddressParts.join(', ')
 
-              const cityRaw = pickFirst(item, [
-                'nmCidade',
-                'cidade',
-                'municipio',
-                'dsCidade',
-                'ds_cidade',
-                'nm_municipio',
-              ])
-
-              const stateRaw = pickFirst(item, [
-                'uf',
-                'sgUf',
-                'siglaUf',
-                'estado',
-                'state',
-                'dsUf',
-                'ds_uf',
-              ])
+              let cityRaw = ''
+              let stateRaw = ''
+              if (item.cidade && typeof item.cidade === 'object') {
+                cityRaw = pickFirst(item.cidade, ['nmCidade', 'nome', 'dsCidade'])
+                stateRaw = pickFirst(item.cidade, ['uf', 'sgUf', 'siglaUf', 'estado'])
+              }
+              if (!cityRaw) {
+                cityRaw = pickFirst(item, [
+                  'nmCidade',
+                  'cidade',
+                  'municipio',
+                  'dsCidade',
+                  'ds_cidade',
+                  'nm_municipio',
+                ])
+              }
+              if (!stateRaw) {
+                stateRaw = pickFirst(item, [
+                  'uf',
+                  'sgUf',
+                  'siglaUf',
+                  'estado',
+                  'state',
+                  'dsUf',
+                  'ds_uf',
+                ])
+              }
 
               let name = nameRaw
               if (!name || name.trim().length < 2) {
@@ -689,7 +771,7 @@ routerAdd(
                     processed +
                     ' de ' +
                     totalErp +
-                    ' clientes (' +
+                    ' (' +
                     createdCount +
                     ' novos, ' +
                     updatedCount +
@@ -714,11 +796,10 @@ routerAdd(
             jobRec.set('updated_count', updatedCount)
             jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(jobRec)
-
             console.log(
               '[FlexSmart-Async ' +
                 syncId +
-                '] Interrompido pelo usuário com sucesso: processados até momento, criados=' +
+                '] Interrompido pelo usuário com sucesso: criados=' +
                 createdCount +
                 ', atualizados=' +
                 updatedCount,
@@ -726,11 +807,16 @@ routerAdd(
             return
           }
 
+          const todayBR = formatCurrentDateBR()
           jobRec.set('status', 'done')
           jobRec.set('imported', totalErp)
           jobRec.set('created_count', createdCount)
           jobRec.set('updated_count', updatedCount)
-          jobRec.set('current_step', 'Concluído com sucesso!')
+          jobRec.set('sync_date', todayBR)
+          jobRec.set(
+            'current_step',
+            'Concluído! ' + createdCount + ' novos, ' + updatedCount + ' atualizados.',
+          )
           jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(jobRec)
 
@@ -743,14 +829,13 @@ routerAdd(
               createdCount +
               ', atualizados=' +
               updatedCount +
-              ', erros=' +
-              errorCount,
+              ', sync_date=' +
+              todayBR,
           )
         } catch (err) {
           const msg = err && err.message ? err.message : String(err)
           console.log('[FlexSmart-Async ' + syncId + '] Falha: ' + msg)
           try {
-            // Se durante o erro o usuário já tiver pedido para cancelar, prioriza cancelled
             const freshRec = $app.findRecordById('flex_sync', syncId)
             const st = freshRec.getString('status')
             if (st === 'cancelling' || st === 'cancelled') {
@@ -764,7 +849,7 @@ routerAdd(
             } else {
               freshRec.set('status', 'error')
               freshRec.set('error', msg)
-              freshRec.set('current_step', 'Erro: ' + msg)
+              freshRec.set('current_step', 'Erro: ' + msg.slice(0, 150))
               freshRec.set(
                 'finished_at',
                 new Date().toISOString().replace('T', ' ').substring(0, 19),
@@ -779,7 +864,9 @@ routerAdd(
         success: true,
         syncId: syncId,
         status: 'pending',
-        message: 'Importação iniciada com sucesso em segundo plano.',
+        targetDate: targetDate,
+        isFullSync: isFullSyncRequested || targetDate === '01/01/2000',
+        message: 'Importação iniciada com sucesso em segundo plano (desde ' + targetDate + ').',
       })
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
@@ -817,7 +904,6 @@ routerAdd(
 
       const currentStatus = rec.getString('status')
 
-      // Se já terminou naturalmente ou já foi cancelado
       if (currentStatus === 'done') {
         return e.json(200, {
           success: true,
@@ -852,11 +938,7 @@ routerAdd(
         rec.set('finished_at', nowIso)
         $app.save(rec)
 
-        console.log(
-          '[FlexSmart] Job de sincronização ' +
-            syncId +
-            ' cancelado imediatamente (estava pending).',
-        )
+        console.log('[FlexSmart] Job ' + syncId + ' cancelado imediatamente (estava pending).')
 
         return e.json(200, {
           success: true,
@@ -865,9 +947,8 @@ routerAdd(
         })
       }
 
-      // Se não houve atualização nos últimos 60 segundos, considera o loop inativo e marca 'cancelled'
       const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
-      const isStale = Date.now() - lastUpdated > 60000
+      const isStale = Date.now() - lastUpdated > 30000
 
       if (isStale) {
         rec.set('status', 'cancelled')
@@ -878,12 +959,6 @@ routerAdd(
         rec.set('finished_at', nowIso)
         $app.save(rec)
 
-        console.log(
-          '[FlexSmart] Job ' +
-            syncId +
-            ' marcado diretamente como cancelled pois estava inativo há mais de 60s.',
-        )
-
         return e.json(200, {
           success: true,
           status: 'cancelled',
@@ -891,17 +966,9 @@ routerAdd(
         })
       }
 
-      // Caso o processamento esteja rodando ativamente, marca como cancelling
       rec.set('status', 'cancelling')
       rec.set('current_step', 'Interrupção solicitada pelo usuário...')
       $app.save(rec)
-
-      console.log(
-        '[FlexSmart] Job de sincronização ' +
-          syncId +
-          ' marcado como cancelling pelo owner ' +
-          ownerId,
-      )
 
       return e.json(200, {
         success: true,
@@ -942,14 +1009,10 @@ routerAdd(
       }
 
       let currentStatus = rec.getString('status')
-
-      // Auto-recuperação no sync-status:
-      // 1. Se estiver em cancelling por mais de 15s
-      // 2. Se estiver em running por mais de 120s sem nenhuma atualização (job travado/morto pelo Goja/OOM no download de 74MB)
       const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
       const timeSinceUpdate = Date.now() - lastUpdated
 
-      if (currentStatus === 'cancelling' && timeSinceUpdate > 15000) {
+      if (currentStatus === 'cancelling' && timeSinceUpdate > 10000) {
         try {
           currentStatus = 'cancelled'
           rec.set('status', 'cancelled')
@@ -963,36 +1026,16 @@ routerAdd(
           )
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
-          console.log(
-            '[FlexSmart] Job ' +
-              syncId +
-              ' transicionado automaticamente de cancelling para cancelled por timeout.',
-          )
-        } catch (autoErr) {
-          console.log('[FlexSmart] Falha ao auto-cancelar: ' + String(autoErr))
-        }
-      } else if (currentStatus === 'running' && timeSinceUpdate > 120000) {
+        } catch (_) {}
+      } else if (currentStatus === 'running' && timeSinceUpdate > 90000) {
         try {
           currentStatus = 'error'
           rec.set('status', 'error')
-          rec.set(
-            'error',
-            'A requisição ao ERP FlexSmart não retornou a tempo ou a execução foi interrompida silenciosamente pelo servidor ao baixar o payload de 74 MB.',
-          )
-          rec.set(
-            'current_step',
-            'Falha: a resposta de 74 MB do ERP não pôde ser completada pelo ambiente do servidor.',
-          )
+          rec.set('error', 'O tempo limite de sincronização foi atingido sem resposta.')
+          rec.set('current_step', 'Falha por tempo limite.')
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
-          console.log(
-            '[FlexSmart] Job ' +
-              syncId +
-              ' em running há mais de 120s sem resposta do ERP transicionado para error.',
-          )
-        } catch (autoErr) {
-          console.log('[FlexSmart] Falha ao recuperar job travado: ' + String(autoErr))
-        }
+        } catch (_) {}
       }
 
       const total = rec.getInt('count')
@@ -1009,6 +1052,8 @@ routerAdd(
         updatedCount: rec.getInt('updated_count'),
         percent: progressPercent,
         error: rec.getString('error'),
+        syncDate: rec.getString('sync_date'),
+        isFullSync: rec.getBool('is_full_sync'),
         startedAt: rec.getString('started_at'),
         finishedAt: rec.getString('finished_at'),
         created: rec.getString('created'),
@@ -1035,6 +1080,16 @@ routerAdd(
         throw new UnauthorizedError('Usuário não autenticado')
       }
 
+      function formatDateToBR(dateObj) {
+        if (!dateObj) return ''
+        const d = new Date(dateObj)
+        if (isNaN(d.getTime())) return ''
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        return day + '/' + month + '/' + year
+      }
+
       const records = $app.findRecordsByFilter('flex_sync', 'owner = {:owner}', '-created', 1, 0, {
         owner: ownerId,
       })
@@ -1045,14 +1100,10 @@ routerAdd(
 
       const rec = records[0]
       let statusVal = rec.getString('status')
-
-      // Auto-recuperação no last-sync:
-      // 1. Se estiver em cancelling por mais de 15 segundos
-      // 2. Se estiver em running por mais de 2 minutos (120s) sem atualização (quando o Goja/PocketBase morre silenciosamente no $http.send de 74 MB)
       const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
       const timeSinceUpdate = Date.now() - lastUpdated
 
-      if (statusVal === 'cancelling' && timeSinceUpdate > 15000) {
+      if (statusVal === 'cancelling' && timeSinceUpdate > 10000) {
         try {
           statusVal = 'cancelled'
           rec.set('status', 'cancelled')
@@ -1067,18 +1118,12 @@ routerAdd(
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
         } catch (_) {}
-      } else if (statusVal === 'running' && timeSinceUpdate > 120000) {
+      } else if (statusVal === 'running' && timeSinceUpdate > 90000) {
         try {
           statusVal = 'error'
           rec.set('status', 'error')
-          rec.set(
-            'error',
-            'O processo de download do ERP FlexSmart excedeu o tempo limite do servidor ou esgotou a memória ao receber o arquivo completo de ~74 MB.',
-          )
-          rec.set(
-            'current_step',
-            'Falha: o servidor encerrou o processo durante o download do grande volume de dados (74 MB).',
-          )
+          rec.set('error', 'Tempo limite atingido.')
+          rec.set('current_step', 'Falha por tempo limite.')
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
         } catch (_) {}
@@ -1087,6 +1132,23 @@ routerAdd(
       const total = rec.getInt('count')
       const imported = rec.getInt('imported')
       const progressPercent = total > 0 ? Math.min(100, Math.round((imported / total) * 100)) : 0
+
+      let nextIncrementalDate = '01/01/2000'
+      try {
+        const lastSuccess = $app.findRecordsByFilter(
+          'flex_sync',
+          'owner = {:owner} && status = "done"',
+          '-created',
+          1,
+          0,
+          { owner: ownerId },
+        )
+        if (lastSuccess.length > 0) {
+          const ls = lastSuccess[0]
+          nextIncrementalDate =
+            ls.getString('sync_date') || formatDateToBR(ls.getString('started_at')) || '01/01/2000'
+        }
+      } catch (_) {}
 
       return e.json(200, {
         lastSync: {
@@ -1099,6 +1161,9 @@ routerAdd(
           updatedCount: rec.getInt('updated_count'),
           percent: progressPercent,
           error: rec.getString('error'),
+          syncDate: rec.getString('sync_date'),
+          isFullSync: rec.getBool('is_full_sync'),
+          nextIncrementalDate: nextIncrementalDate,
           startedAt: rec.getString('started_at'),
           finishedAt: rec.getString('finished_at'),
           created: rec.getString('created'),
@@ -1113,140 +1178,13 @@ routerAdd(
   $apis.requireAuth(),
 )
 
-// 5. Rota de teste/diagnóstico manual para verificar download de /Cliente/getAll e parâmetros de paginação/filtro
-// Dispara teste em segundo plano para medir download/parse sem sofrer timeout do cliente HTTP (aceita GET e POST)
-routerAdd('GET', '/backend/v1/flexsmart/run-diagnostic-probe', (e) => {
+// 5. Rota de teste/diagnóstico do novo endpoint getByDtAtz
+routerAdd('GET', '/backend/v1/flexsmart/test-by-date', (e) => {
   try {
     const queryParams = e.request.url.query()
-    const testMode = queryParams.get('test') || 'raw'
+    const targetDate = queryParams.get('data') || '26/10/2026'
 
-    setTimeout(() => {
-      function getProbeToken() {
-        try {
-          if ($app.store && $app.store().has('flexsmart_cached_token')) {
-            const cached = $app.store().get('flexsmart_cached_token')
-            if (cached) return String(cached)
-          }
-        } catch (_) {}
-
-        const username =
-          $os.getenv('FLEXSMART_USERNAME') ||
-          ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
-        const password =
-          $os.getenv('FLEXSMART_PASSWORD') ||
-          ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
-
-        const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-        const r = $http.send({
-          url: loginUrl,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: username, password: password }),
-          timeout: 30,
-        })
-        const pj = r.json || (r.raw ? JSON.parse(r.raw) : null)
-        return pj && pj.access_token ? pj.access_token : null
-      }
-
-      const token = getProbeToken()
-      if (!token) {
-        console.log('[PROBE-BG] Falha ao obter token')
-        return
-      }
-
-      const rawBase =
-        $os.getenv('FLEXSMART_BASE_URL') ||
-        ($secrets && $secrets.has('FLEXSMART_BASE_URL')
-          ? $secrets.get('FLEXSMART_BASE_URL')
-          : '') ||
-        'https://api.impave.com.br:8443'
-      const base = rawBase.replace(/\/+$/, '')
-
-      const tStart = Date.now()
-      console.log('[PROBE-BG] Iniciando GET /Cliente/getAll...')
-      try {
-        const res = $http.send({
-          url: base + '/Cliente/getAll',
-          method: 'GET',
-          headers: { AuthToken: token, Accept: 'application/json' },
-          timeout: 300,
-        })
-        const tElapsed = ((Date.now() - tStart) / 1000).toFixed(2)
-        const rawBytes = res.raw ? res.raw.length : 0
-        const rawMB = (rawBytes / (1024 * 1024)).toFixed(2)
-
-        let isArr = false
-        let ct = 0
-        if (Array.isArray(res.json)) {
-          isArr = true
-          ct = res.json.length
-        }
-
-        console.log(
-          '[PROBE-BG] Concluído! status=' +
-            res.statusCode +
-            ' bytes=' +
-            rawBytes +
-            ' (' +
-            rawMB +
-            ' MB) dlTime=' +
-            tElapsed +
-            's isArray=' +
-            isArr +
-            ' count=' +
-            ct,
-        )
-
-        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
-        rec.set(
-          'error',
-          'PROBE_RESULT: HTTP ' +
-            res.statusCode +
-            ' | ' +
-            rawMB +
-            ' MB (' +
-            rawBytes +
-            ' bytes) em ' +
-            tElapsed +
-            's | isArray=' +
-            isArr +
-            ' count=' +
-            ct,
-        )
-        $app.save(rec)
-      } catch (eProbe) {
-        const tElapsed = ((Date.now() - tStart) / 1000).toFixed(2)
-        console.log('[PROBE-BG] Erro após ' + tElapsed + 's: ' + String(eProbe))
-        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
-        rec.set('error', 'PROBE_FAILED em ' + tElapsed + 's: ' + String(eProbe))
-        $app.save(rec)
-      }
-    }, 0)
-
-    return e.json(200, { success: true, message: 'Diagnóstico em segundo plano iniciado.' })
-  } catch (err) {
-    return e.json(500, { success: false, error: String(err) })
-  }
-})
-
-// Separa download de parse: mede tamanho de res.raw SEM fazer JSON.parse nem ler res.json quando solicitado
-routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
-  try {
-    const queryParams = e.request.url.query()
-    const testParam = queryParams.get('test') || '' // ex: 'raw', 'parse', 'probe-params'
-    console.log(
-      '[FlexSmart-TestGetAll] Iniciando diagnóstico com modo: ' + (testParam || 'default'),
-    )
-
-    function getTestToken() {
-      // Reutiliza token em cache se houver
-      try {
-        if ($app.store && $app.store().has('flexsmart_cached_token')) {
-          const cached = $app.store().get('flexsmart_cached_token')
-          if (cached) return String(cached)
-        }
-      } catch (_) {}
-
+    function getInlineToken() {
       const username =
         $os.getenv('FLEXSMART_USERNAME') ||
         ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
@@ -1255,43 +1193,20 @@ routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
         ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
 
       const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-      let res = null
-      let lastErr = null
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          res = $http.send({
-            url: loginUrl,
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: username, password: password }),
-            timeout: 20,
-          })
-          if (res) break
-        } catch (eLogin) {
-          lastErr = eLogin
-        }
-      }
+      const r = $http.send({
+        url: loginUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+        timeout: 30,
+      })
+      const pj = r.json || (r.raw ? JSON.parse(r.raw) : null)
+      return pj && pj.access_token ? pj.access_token : null
+    }
 
-      if (!res) {
-        throw new Error('Falha no login após tentativas: ' + String(lastErr))
-      }
-
-      let parsed = res.json
-      if (!parsed && res.raw) {
-        try {
-          parsed = JSON.parse(res.raw)
-        } catch (_) {}
-      }
-      if (parsed && parsed.access_token) {
-        try {
-          if ($app.store) {
-            $app.store().set('flexsmart_cached_token', parsed.access_token)
-            $app.store().set('flexsmart_token_time', String(Date.now()))
-          }
-        } catch (_) {}
-        return parsed.access_token
-      }
-      throw new Error('Falha no login: HTTP ' + res.statusCode + ' ' + (res.raw || ''))
+    const token = getInlineToken()
+    if (!token) {
+      return e.json(500, { error: 'Falha ao autenticar no ERP' })
     }
 
     const rawBase =
@@ -1299,174 +1214,61 @@ routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
       ($secrets && $secrets.has('FLEXSMART_BASE_URL') ? $secrets.get('FLEXSMART_BASE_URL') : '') ||
       'https://api.impave.com.br:8443'
     const base = rawBase.replace(/\/+$/, '')
-    const token = getTestToken()
 
-    // Se o modo for testar paginação/filtros
-    if (testParam === 'probe-params') {
-      const targetQuery = queryParams.get('q') || '?pagina=1&limite=5'
-      const u = base + '/Cliente/getAll' + targetQuery
-      const t0 = Date.now()
-      let status = 0
-      let rawLen = 0
-      let errStr = null
-      let isArr = false
-      let count = 0
-      try {
-        const r = $http.send({
-          url: u,
-          method: 'GET',
-          headers: { AuthToken: token, Accept: 'application/json' },
-          timeout: 5, // curto: se responder rápido com lista pequena sabemos que filtrou/paginou!
-        })
-        status = r.statusCode
-        rawLen = r.raw ? r.raw.length : 0
-        if (Array.isArray(r.json)) {
-          isArr = true
-          count = r.json.length
-        }
-      } catch (pe) {
-        errStr = String(pe)
-      }
-
-      const resObj = {
-        query: targetQuery,
-        status: status,
-        rawLen: rawLen,
-        rawMB: (rawLen / (1024 * 1024)).toFixed(2),
-        isArray: isArr,
-        itemCount: count,
-        ms: Date.now() - t0,
-        error: errStr,
-      }
-
-      try {
-        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
-        rec.set('error', 'PROBE_QUERY: ' + JSON.stringify(resObj).slice(0, 500))
-        $app.save(rec)
-      } catch (_) {}
-
-      return e.json(200, { success: true, result: resObj })
-    }
-
-    // Modo padrão / download de getAll:
-    // Grava resultado também em um registro de diagnóstico no flex_sync para permitir inspeção sem timeout HTTP
-    const tStart = Date.now()
-    const targetUrl = base + '/Cliente/getAll'
-    console.log('[FlexSmart-TestGetAll] Iniciando GET ' + targetUrl + ' (timeout 300s)...')
-
-    let res = null
-    let getErr = null
-    try {
-      res = $http.send({
-        url: targetUrl,
-        method: 'GET',
-        headers: {
-          AuthToken: token,
-          Accept: 'application/json',
-        },
-        timeout: 300,
-      })
-    } catch (eSend) {
-      getErr = eSend
-    }
-
-    const tElapsedSec = ((Date.now() - tStart) / 1000).toFixed(2)
-
-    if (getErr || !res) {
-      const errMsg = getErr ? String(getErr) : 'sem resposta'
-      console.log('[FlexSmart-TestGetAll] Erro no $http.send após ' + tElapsedSec + 's: ' + errMsg)
-      try {
-        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
-        rec.set('error', 'DIAGNOSTIC_DOWNLOAD_FAIL: ' + errMsg + ' (' + tElapsedSec + 's)')
-        $app.save(rec)
-      } catch (_) {}
-      return e.json(500, { success: false, error: errMsg, elapsedSec: tElapsedSec })
-    }
+    const url = base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(targetDate)
+    const t0 = Date.now()
+    const res = $http.send({
+      url: url,
+      method: 'GET',
+      headers: {
+        AuthToken: token,
+        Accept: 'application/json',
+      },
+      timeout: 45,
+    })
+    const elapsedMs = Date.now() - t0
 
     const rawLen = res.raw ? res.raw.length : 0
-    const rawMB = (rawLen / (1024 * 1024)).toFixed(2)
+    const rawKB = (rawLen / 1024).toFixed(2)
+    const isArr = Array.isArray(res.json)
+    let count = isArr ? res.json.length : 0
+    let sample = isArr && count > 0 ? res.json[0] : null
+    let format = isArr ? 'direct_array' : typeof res.json
 
     console.log(
-      '[FlexSmart-TestGetAll] Download concluído! HTTP=' +
+      '[FlexSmart-TestByDate] data=' +
+        targetDate +
+        ' HTTP=' +
         res.statusCode +
-        ' tempo=' +
-        tElapsedSec +
-        's rawBytes=' +
+        ' ms=' +
+        elapsedMs +
+        ' bytes=' +
         rawLen +
         ' (' +
-        rawMB +
-        ' MB)',
+        rawKB +
+        ' KB) count=' +
+        count,
     )
-
-    let parseStatus = 'skipped'
-    let parseElapsedSec = '0'
-    let itemCount = null
-
-    if (testParam === 'parse') {
-      const tParseStart = Date.now()
-      console.log('[FlexSmart-TestGetAll] Iniciando parse...')
-      if (Array.isArray(res.json)) {
-        itemCount = res.json.length
-        parseStatus = 'res.json_native'
-      } else if (res.raw) {
-        const parsed = JSON.parse(res.raw)
-        itemCount = Array.isArray(parsed) ? parsed.length : 'object'
-        parseStatus = 'JSON.parse(res.raw)'
-      }
-      parseElapsedSec = ((Date.now() - tParseStart) / 1000).toFixed(2)
-      console.log(
-        '[FlexSmart-TestGetAll] Parse finalizado em ' +
-          parseElapsedSec +
-          's! Modo=' +
-          parseStatus +
-          ' Itens=' +
-          itemCount,
-      )
-    }
-
-    // Persiste o resultado do diagnóstico no último flex_sync para auditoria e histórico permanente
-    try {
-      const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
-      rec.set(
-        'error',
-        'DIAGNOSTIC_OK: bytes=' +
-          rawLen +
-          ' (' +
-          rawMB +
-          ' MB), dlTime=' +
-          tElapsedSec +
-          's, parse=' +
-          parseStatus +
-          ', parseTime=' +
-          parseElapsedSec +
-          's, items=' +
-          itemCount,
-      )
-      $app.save(rec)
-    } catch (_) {}
 
     return e.json(200, {
       success: true,
+      dataParam: targetDate,
       statusCode: res.statusCode,
+      elapsedMs: elapsedMs,
       rawBytes: rawLen,
-      rawMB: rawMB,
-      downloadElapsedSec: tElapsedSec,
-      parseStatus: parseStatus,
-      parseElapsedSec: parseElapsedSec,
-      itemCount: itemCount,
+      rawKB: rawKB,
+      format: format,
+      count: count,
+      sample: sample,
       snippet: String(res.raw || '').slice(0, 300),
     })
   } catch (err) {
     const msg = err && err.message ? err.message : String(err)
-    console.log('[FlexSmart-TestGetAll] Erro no teste: ' + msg)
-    return e.json(500, {
-      success: false,
-      error: msg,
-    })
+    return e.json(500, { success: false, error: msg })
   }
 })
 
-// 6. Rota de teste/diagnóstico de login (Passo 1)
+// 6. Rota de teste/diagnóstico de login
 routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {
   try {
     const username =
@@ -1477,33 +1279,21 @@ routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {
       ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
 
     const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-    const res = $http.send({
+    const r = $http.send({
       url: loginUrl,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: username, password: password }),
       timeout: 30,
     })
-
-    let parsed = res.json
-    if (!parsed && res.raw) {
-      try {
-        parsed = JSON.parse(res.raw)
-      } catch (_) {}
-    }
-
-    if (parsed && parsed.access_token) {
+    const pj = r.json || (r.raw ? JSON.parse(r.raw) : null)
+    if (pj && pj.access_token) {
       return e.json(200, {
         success: true,
-        access_token: parsed.access_token,
+        access_token: pj.access_token,
       })
     }
-
-    return e.json(400, {
-      success: false,
-      error: 'Token não retornado: HTTP ' + res.statusCode,
-      raw: res.raw,
-    })
+    return e.json(400, { success: false, error: 'Login falhou: HTTP ' + r.statusCode })
   } catch (err) {
     const msg = err && err.message ? err.message : String(err)
     return e.json(400, {
@@ -1513,7 +1303,7 @@ routerAdd('POST', '/backend/v1/flexsmart/test-login', (e) => {
   }
 })
 
-// 7. Rota síncrona /backend/v1/flexsmart/sync (executa e retorna resultado final)
+// 7. Rota síncrona /backend/v1/flexsmart/sync (mantida por compatibilidade usando o novo endpoint)
 routerAdd(
   'POST',
   '/backend/v1/flexsmart/sync',
@@ -1526,92 +1316,28 @@ routerAdd(
         return e.json(401, { error: 'Usuário não autenticado' })
       }
 
-      function getToken(forceRefresh) {
-        const username =
-          $os.getenv('FLEXSMART_USERNAME') ||
-          ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
-        const password =
-          $os.getenv('FLEXSMART_PASSWORD') ||
-          ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
-
-        const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-        const res = $http.send({
-          url: loginUrl,
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ username: username, password: password }),
-          timeout: 30,
-        })
-
-        let parsed = res.json
-        if (!parsed && res.raw) {
-          try {
-            parsed = JSON.parse(res.raw)
-          } catch (_) {}
-        }
-        if (parsed && parsed.access_token) {
-          return parsed.access_token
-        }
-        throw new Error('Falha no login: HTTP ' + res.statusCode)
-      }
-
-      function fetchERP() {
-        const rawBase =
-          $os.getenv('FLEXSMART_BASE_URL') ||
-          ($secrets && $secrets.has('FLEXSMART_BASE_URL')
-            ? $secrets.get('FLEXSMART_BASE_URL')
-            : '') ||
-          'https://api.impave.com.br:8443'
-        const base = rawBase.replace(/\/+$/, '')
-        const token = getToken(false)
-
-        let res = $http.send({
-          url: base + '/Cliente/getAll',
-          method: 'GET',
-          headers: {
-            AuthToken: token,
-            Accept: 'application/json',
-          },
-          timeout: 300,
-        })
-
-        if (res.statusCode === 401 || res.statusCode === 403) {
-          const freshToken = getToken(true)
-          res = $http.send({
-            url: base + '/Cliente/getAll',
-            method: 'GET',
-            headers: {
-              AuthToken: freshToken,
-              Accept: 'application/json',
-            },
-            timeout: 300,
-          })
-        }
-
-        if (res.statusCode < 200 || res.statusCode >= 300) {
-          throw new Error('Falha ao buscar clientes: HTTP ' + res.statusCode)
-        }
-
-        let dados = res.json
-        if (!dados && res.raw) {
-          try {
-            dados = JSON.parse(res.raw)
-          } catch (_) {}
-        }
-
-        if (Array.isArray(dados)) return dados
-        if (dados && typeof dados === 'object') {
-          for (const k of Object.keys(dados)) {
-            if (Array.isArray(dados[k])) return dados[k]
-          }
-        }
-        throw new Error('Resposta de /Cliente/getAll não continha lista')
+      function cleanDigits(str) {
+        if (!str) return ''
+        return String(str).replace(/\D/g, '')
       }
 
       function pickFirst(obj, keys) {
+        if (!obj || typeof obj !== 'object') return ''
         for (const k of keys) {
           const val = obj[k]
           if (val !== undefined && val !== null) {
+            if (typeof val === 'object') {
+              const nestedName = pickFirst(val, [
+                'nmCidade',
+                'nome',
+                'dsCidade',
+                'dsBairro',
+                'nmBairro',
+                'uf',
+                'sgUf',
+              ])
+              if (nestedName) return nestedName
+            }
             const s = String(val).trim()
             if (s !== '') return s
           }
@@ -1619,12 +1345,54 @@ routerAdd(
         return ''
       }
 
-      function cleanDigits(str) {
-        if (!str) return ''
-        return String(str).replace(/\D/g, '')
+      const username =
+        $os.getenv('FLEXSMART_USERNAME') ||
+        ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
+      const password =
+        $os.getenv('FLEXSMART_PASSWORD') ||
+        ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
+
+      const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+      const lr = $http.send({
+        url: loginUrl,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+        timeout: 30,
+      })
+      const lpj = lr.json || (lr.raw ? JSON.parse(lr.raw) : null)
+      const token = lpj && lpj.access_token ? lpj.access_token : null
+
+      if (!token) {
+        return e.json(500, { error: 'Falha ao autenticar no FlexSmart' })
       }
 
-      const erpList = fetchERP()
+      const rawBase =
+        $os.getenv('FLEXSMART_BASE_URL') ||
+        ($secrets && $secrets.has('FLEXSMART_BASE_URL')
+          ? $secrets.get('FLEXSMART_BASE_URL')
+          : '') ||
+        'https://api.impave.com.br:8443'
+      const base = rawBase.replace(/\/+$/, '')
+
+      const targetDate = '01/01/2000'
+      const r = $http.send({
+        url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(targetDate),
+        method: 'GET',
+        headers: { AuthToken: token, Accept: 'application/json' },
+        timeout: 60,
+      })
+
+      let erpList = []
+      if (Array.isArray(r.json)) {
+        erpList = r.json
+      } else if (r.raw) {
+        try {
+          const parsed = JSON.parse(r.raw)
+          if (Array.isArray(parsed)) erpList = parsed
+        } catch (_) {}
+      }
+
       const totalErp = erpList.length
 
       const existingRecords = $app.findRecordsByFilter(
@@ -1692,7 +1460,14 @@ routerAdd(
           const logradouro = pickFirst(item, ['enderecoLogradouro', 'logradouro', 'endereco'])
           const numero = pickFirst(item, ['enderecoNumero', 'numero'])
           const complemento = pickFirst(item, ['enderecoComplemento', 'complemento'])
-          const bairro = pickFirst(item, ['bairro', 'dsBairro'])
+
+          let bairro = ''
+          if (item.bairro && typeof item.bairro === 'object') {
+            bairro = pickFirst(item.bairro, ['nmBairro', 'dsBairro', 'nome'])
+          }
+          if (!bairro) {
+            bairro = pickFirst(item, ['bairro', 'dsBairro', 'nmBairro'])
+          }
 
           let fullAddressParts = []
           if (logradouro) {
@@ -1703,8 +1478,15 @@ routerAdd(
             fullAddressParts.push(addr)
           }
           const address = fullAddressParts.join(', ')
-          const cityRaw = pickFirst(item, ['nmCidade', 'cidade', 'municipio'])
-          const stateRaw = pickFirst(item, ['uf', 'sgUf', 'estado'])
+
+          let cityRaw = ''
+          let stateRaw = ''
+          if (item.cidade && typeof item.cidade === 'object') {
+            cityRaw = pickFirst(item.cidade, ['nmCidade', 'nome'])
+            stateRaw = pickFirst(item.cidade, ['uf', 'sgUf'])
+          }
+          if (!cityRaw) cityRaw = pickFirst(item, ['nmCidade', 'cidade', 'municipio'])
+          if (!stateRaw) stateRaw = pickFirst(item, ['uf', 'sgUf', 'estado'])
 
           let name = nameRaw
           if (!name || name.trim().length < 2) {
@@ -1712,7 +1494,6 @@ routerAdd(
           }
 
           let targetRecord = null
-
           if (erpCode && clientsByErpCode.has(erpCode)) {
             targetRecord = clientsByErpCode.get(erpCode)
           } else if (docClean && clientsByDoc.has(docClean)) {

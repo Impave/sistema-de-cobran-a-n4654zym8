@@ -53,19 +53,24 @@ export const clientsService = {
     return await pb.collection('clients').delete(id)
   },
 
-  async startFlexSmartSync(): Promise<{
+  async startFlexSmartSync(options?: { fullSync?: boolean; date?: string }): Promise<{
     success: boolean
     syncId: string
     status: string
+    targetDate?: string
+    isFullSync?: boolean
     message: string
   }> {
     const res = await pb.send<{
       success: boolean
       syncId: string
       status: string
+      targetDate?: string
+      isFullSync?: boolean
       message: string
     }>('/backend/v1/flexsmart/start-sync', {
       method: 'POST',
+      body: options || {},
     })
     return res
   },
@@ -90,6 +95,17 @@ export const clientsService = {
   async getLastFlexSmartSync(): Promise<{ lastSync: FlexSmartSyncStatus | null }> {
     const res = await pb.send<{ lastSync: FlexSmartSyncStatus | null }>(
       '/backend/v1/flexsmart/last-sync',
+      {
+        method: 'GET',
+      },
+    )
+    return res
+  },
+
+  async testFlexSmartByDate(data?: string): Promise<Record<string, unknown>> {
+    const query = data ? `?data=${encodeURIComponent(data)}` : ''
+    const res = await pb.send<Record<string, unknown>>(
+      `/backend/v1/flexsmart/test-by-date${query}`,
       {
         method: 'GET',
       },

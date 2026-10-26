@@ -265,7 +265,6 @@ export default function ClientsPage() {
       .getLastFlexSmartSync()
       .then((res) => {
         if (isMounted && res.lastSync) {
-          // Se o último sync estiver marcado como cancelling há mais de 10s, trata como cancelled
           const sync = res.lastSync
           if (sync.status === 'cancelling') {
             const syncTime = sync.updated ? new Date(sync.updated).getTime() : 0
@@ -321,8 +320,8 @@ export default function ClientsPage() {
           return
         }
 
-        // Timeout de segurança no frontend para job em 'running' sem resposta por mais de 3 minutos (180s)
-        if (activeSync.status === 'running' && Date.now() - startTime > 180000) {
+        // Timeout de segurança no frontend para job em 'running' sem resposta por mais de 90s
+        if (activeSync.status === 'running' && Date.now() - startTime > 90000) {
           clearInterval(interval)
           setSyncLoading(false)
           setCancellingSync(false)
@@ -331,17 +330,14 @@ export default function ClientsPage() {
               ? {
                   ...prev,
                   status: 'error',
-                  currentStep:
-                    'Falha: o servidor encerrou o processo ou expirou o tempo limite ao baixar o arquivo de 74 MB.',
-                  error:
-                    'O download dos dados de clientes excedeu o limite de execução do servidor. Tente novamente em alguns instantes.',
+                  currentStep: 'Tempo limite de sincronização excedido.',
+                  error: 'O servidor não respondeu a tempo. Tente novamente.',
                 }
               : null,
           )
           toast({
             title: 'Tempo limite excedido',
-            description:
-              'A resposta do ERP de 74 MB demorou além do limite de conexão do servidor. O botão foi liberado para nova tentativa.',
+            description: 'A resposta do ERP demorou além do limite de tempo. Tente novamente.',
             variant: 'destructive',
           })
           return
@@ -434,32 +430,33 @@ export default function ClientsPage() {
     }
   }
 
-  // Sincronização com o ERP FlexSmart (início assíncrono com barra de progresso)
-  const handleSyncFlexSmart = async () => {
+  // Sincronização com o ERP FlexSmart (incremental ou completa "do zero")
+  const handleSyncFlexSmart = async (fullSync = false) => {
     setSyncLoading(true)
     try {
-      const res = await clientsService.startFlexSmartSync()
+      const res = await clientsService.startFlexSmartSync({ fullSync })
       if (res.syncId) {
-        // Inicializa o activeSync para iniciar o polling imediatamente
+        const targetDate = res.targetDate || (fullSync ? '01/01/2000' : 'última sincronização')
         setActiveSync({
           id: res.syncId,
           status: 'pending',
-          currentStep: 'Iniciando importação do ERP...',
+          currentStep: `Iniciando importação do ERP (desde ${targetDate})...`,
           count: 0,
           imported: 0,
           createdCount: 0,
           updatedCount: 0,
           percent: 0,
+          syncDate: targetDate,
+          isFullSync: fullSync || targetDate === '01/01/2000',
         })
         toast({
-          title: 'Sincronização iniciada',
-          description: 'A importação do FlexSmart está sendo processada em segundo plano.',
+          title: fullSync ? 'Importação completa iniciada' : 'Sincronização incremental iniciada',
+          description: `Buscando clientes alterados desde ${targetDate} em segundo plano.`,
         })
       }
     } catch (err: unknown) {
       setSyncLoading(false)
       let msg = getErrorMessage(err)
-      // Se a mensagem ainda for genérica em inglês do SDK
       if (!msg || msg === 'An unexpected error occurred.' || msg.includes('Something went wrong')) {
         msg = 'Ocorreu um erro ao comunicar com o servidor.'
       }
@@ -469,7 +466,6 @@ export default function ClientsPage() {
         description: msg,
         variant: 'destructive',
       })
-      // Atualiza o estado da última sincronização para refletir no card se o job foi criado ou se falhou
       try {
         const last = await clientsService.getLastFlexSmartSync()
         if (last?.lastSync) {
@@ -505,41 +501,112 @@ export default function ClientsPage() {
             Gerencie sua carteira de clientes, dados cadastrais e histórico de cobranças
           </p>
         </div>
-        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handleSyncFlexSmart}
-            disabled={
-              syncLoading ||
-              loading ||
-              cancellingSync ||
-              activeSync?.status === 'running' ||
-              activeSync?.status === 'pending' ||
-              activeSync?.status === 'cancelling'
-            }
-            className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium shadow-xs"
-            title="Sincronizar cadastros de clientes a partir do ERP FlexSmart"
-          >
-            {cancellingSync || activeSync?.status === 'cancelling' ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-amber-600" />
-                Interrompendo...
-              </>
-            ) : syncLoading ||
-              activeSync?.status === 'running' ||
-              activeSync?.status === 'pending' ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
-                Importando do ERP...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-4 h-4 mr-1.5 text-indigo-600" />
-                Importar do ERP FlexSmart
-              </>
-            )}
-          </Button>
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          {/* Botão de sincronização com dropdown de opções (Incremental / Do Zero) */}
+          <div className="inline-flex rounded-lg shadow-xs">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => handleSyncFlexSmart(false)}
+              disabled={
+                syncLoading ||
+                loading ||
+                cancellingSync ||
+                activeSync?.status === 'running' ||
+                activeSync?.status === 'pending' ||
+                activeSync?.status === 'cancelling'
+              }
+              className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium rounded-r-none"
+              title={
+                activeSync?.nextIncrementalDate
+                  ? `Sincronizar clientes alterados desde ${activeSync.nextIncrementalDate}`
+                  : 'Sincronizar clientes alterados a partir do ERP FlexSmart'
+              }
+            >
+              {cancellingSync || activeSync?.status === 'cancelling' ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-amber-600" />
+                  Interrompendo...
+                </>
+              ) : syncLoading ||
+                activeSync?.status === 'running' ||
+                activeSync?.status === 'pending' ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
+                  Importando do ERP...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4 mr-1.5 text-indigo-600" />
+                  <span>Importar do ERP FlexSmart</span>
+                  {activeSync?.nextIncrementalDate &&
+                    activeSync.nextIncrementalDate !== '01/01/2000' && (
+                      <span className="hidden md:inline ml-1 text-xs text-slate-400 font-normal">
+                        (desde {activeSync.nextIncrementalDate})
+                      </span>
+                    )}
+                </>
+              )}
+            </Button>
+
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  disabled={
+                    syncLoading ||
+                    loading ||
+                    cancellingSync ||
+                    activeSync?.status === 'running' ||
+                    activeSync?.status === 'pending' ||
+                    activeSync?.status === 'cancelling'
+                  }
+                  className="border-l-0 border-slate-300 text-slate-700 hover:bg-slate-50 rounded-l-none px-2"
+                  title="Mais opções de importação do ERP"
+                >
+                  <ChevronDown className="w-4 h-4 text-slate-500" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-64">
+                <DropdownMenuLabel className="text-xs text-slate-500 font-medium">
+                  Modos de sincronização ERP
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => handleSyncFlexSmart(false)}
+                  className="cursor-pointer text-xs py-2"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-medium text-slate-800 flex items-center gap-1.5">
+                      <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+                      Importação Incremental (Padrão)
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      {activeSync?.nextIncrementalDate
+                        ? `Busca clientes alterados desde ${activeSync.nextIncrementalDate}`
+                        : 'Busca clientes alterados desde a última importação'}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleSyncFlexSmart(true)}
+                  className="cursor-pointer text-xs py-2 text-indigo-950"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-medium text-indigo-600 flex items-center gap-1.5">
+                      <History className="w-3.5 h-3.5" />
+                      Importar tudo do zero
+                    </span>
+                    <span className="text-[11px] text-slate-500">
+                      Busca todo o histórico de clientes cadastrados no ERP
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
 
           <Button
             onClick={handleOpenCreate}

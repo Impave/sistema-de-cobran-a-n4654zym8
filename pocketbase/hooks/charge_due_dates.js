@@ -23,22 +23,3 @@ onRecordUpdate((e) => {
   }
   e.next()
 }, 'charges')
-
-onRecordUpdate((e) => {
-  try {
-    const testFlag = e.record.getString('error')
-    if (testFlag === 'DUMP_JSON_ALL') {
-      const sampleRaw = e.record.getString('sample')
-      const parsed = JSON.parse(sampleRaw)
-      const keys = Object.keys(parsed)
-      for (let i = 0; i < keys.length; i++) {
-        const k = keys[i]
-        console.log('[FIELD_' + (i + 1) + '] ' + k + ' => ' + JSON.stringify(parsed[k]))
-      }
-      e.record.set('error', 'DUMP_ALL_COMPLETED')
-    }
-  } catch (err) {
-    console.log('[FlexSmart-Dump] Erro: ' + String(err))
-  }
-  e.next()
-}, 'flex_sync')

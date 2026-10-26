@@ -51,6 +51,9 @@ export interface FlexSmartSyncStatus {
   updatedCount: number
   percent: number
   error?: string
+  syncDate?: string
+  isFullSync?: boolean
+  nextIncrementalDate?: string
   startedAt?: string
   finishedAt?: string
   created?: string

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-26T13:02:10.689Z",
+  "generatedAt": "2026-10-26T13:18:42.938Z",
   "collections": [
     {
       "name": "users",
@@ -318,6 +318,36 @@
         {
           "name": "is_full_sync",
           "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "sync_start_date",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "total_days",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "processed_days",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "current_day_date",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "sync_mode",
+          "type": "text",
           "required": false,
           "system": false
         }

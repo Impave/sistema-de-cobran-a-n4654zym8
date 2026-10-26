@@ -21,6 +21,7 @@ import {
   Ban,
   ChevronDown,
   Calendar,
+  Database,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -440,30 +441,50 @@ export default function ClientsPage() {
     }
   }
 
-  // Sincronização manual com o ERP FlexSmart usando sempre a data de ontem
-  const handleSyncFlexSmart = async (customDate?: string) => {
+  // Sincronização manual com o ERP FlexSmart
+  const handleSyncFlexSmart = async (options?: {
+    date?: string
+    mode?: 'single_date' | 'day_by_day'
+  }) => {
     setSyncLoading(true)
     try {
+      const isDayByDay = options?.mode === 'day_by_day'
       const res = await clientsService.startFlexSmartSync(
-        customDate ? { date: customDate } : undefined,
+        options
+          ? {
+              date: options.date,
+              mode: options.mode,
+            }
+          : undefined,
       )
       if (res.syncId) {
         const targetDate = res.targetDate || 'ontem'
+        const isDayByDayMode = res.syncMode === 'day_by_day' || isDayByDay
+        const totalDays = res.totalDays || 1
         setActiveSync({
           id: res.syncId,
           status: 'pending',
-          currentStep: `Buscando clientes alterados desde ${targetDate} no ERP...`,
+          currentStep: isDayByDayMode
+            ? `Iniciando carga completa dia a dia (01/09/2026 → hoje, ${totalDays} dias)...`
+            : `Buscando clientes alterados desde ${targetDate} no ERP...`,
           count: 0,
           imported: 0,
           createdCount: 0,
           updatedCount: 0,
           percent: 0,
           syncDate: targetDate,
-          isFullSync: false,
+          syncStartDate: res.syncStartDate || (isDayByDayMode ? '01/09/2026' : targetDate),
+          totalDays: totalDays,
+          processedDays: 0,
+          currentDayDate: isDayByDayMode ? '01/09/2026' : targetDate,
+          syncMode: isDayByDayMode ? 'day_by_day' : 'single_date',
+          isFullSync: isDayByDayMode,
         })
         toast({
-          title: 'Importação do ERP iniciada',
-          description: `Buscando clientes alterados desde ${targetDate} em segundo plano. Clientes existentes serão atualizados.`,
+          title: isDayByDayMode ? 'Carga completa iniciada' : 'Importação do ERP iniciada',
+          description: isDayByDayMode
+            ? `Carga completa dia a dia iniciada (01/09/2026 → hoje). ${totalDays} dias serão verificados sequencialmente.`
+            : `Buscando clientes alterados desde ${targetDate} em segundo plano. Clientes existentes serão atualizados.`,
         })
       }
     } catch (err: unknown) {
@@ -602,7 +623,7 @@ export default function ClientsPage() {
                   </div>
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => handleSyncFlexSmart(activeSync?.todayDate)}
+                  onClick={() => handleSyncFlexSmart({ date: activeSync?.todayDate })}
                   className="cursor-pointer text-xs py-2 text-indigo-950"
                 >
                   <div className="flex flex-col gap-0.5">
@@ -614,6 +635,21 @@ export default function ClientsPage() {
                       {activeSync?.todayDate
                         ? `Clientes alterados a partir de hoje (${activeSync.todayDate})`
                         : 'Busca apenas clientes alterados no dia corrente'}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={() => handleSyncFlexSmart({ mode: 'day_by_day' })}
+                  className="cursor-pointer text-xs py-2 bg-indigo-50/50 hover:bg-indigo-50"
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-indigo-700 flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-indigo-600" />
+                      Carga completa dia a dia (01/09/2026 → hoje)
+                    </span>
+                    <span className="text-[11px] text-slate-600">
+                      Itera dia a dia desde 01/09/2026 até hoje com upsert de clientes.
                     </span>
                   </div>
                 </DropdownMenuItem>
@@ -753,9 +789,20 @@ export default function ClientsPage() {
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs text-slate-600 font-medium">
                   <span>
-                    {activeSync.count > 0
-                      ? `${activeSync.imported} de ${activeSync.count} processados (${activeSync.createdCount} novos, ${activeSync.updatedCount} atualizados)`
-                      : 'Carregando lista de clientes do ERP...'}
+                    {activeSync.syncMode === 'day_by_day' || activeSync.isFullSync ? (
+                      <>
+                        {activeSync.currentDayDate ? `Dia ${activeSync.currentDayDate} — ` : ''}
+                        {activeSync.totalDays
+                          ? `${activeSync.processedDays ?? 0} de ${activeSync.totalDays} dias`
+                          : 'Processando dias'}{' '}
+                        ({activeSync.createdCount} novos, {activeSync.updatedCount} atualizados
+                        acumulados)
+                      </>
+                    ) : activeSync.count > 0 ? (
+                      `${activeSync.imported} de ${activeSync.count} processados (${activeSync.createdCount} novos, ${activeSync.updatedCount} atualizados)`
+                    ) : (
+                      'Carregando dados do ERP...'
+                    )}
                   </span>
                   <span className="font-semibold">{activeSync.percent}%</span>
                 </div>
@@ -776,9 +823,23 @@ export default function ClientsPage() {
             {activeSync.status === 'cancelled' && (
               <div className="text-xs text-amber-800 bg-amber-100/60 border border-amber-200 rounded-lg p-2.5 flex items-center justify-between">
                 <span>
-                  Processamento interrompido. Todos os <strong>{activeSync.imported}</strong>{' '}
-                  cliente(s) importados até a parada ({activeSync.createdCount} novos,{' '}
-                  {activeSync.updatedCount} atualizados) foram preservados com sucesso no banco.
+                  Processamento interrompido.{' '}
+                  {activeSync.syncMode === 'day_by_day' || activeSync.isFullSync ? (
+                    <>
+                      Parado no fim do dia{' '}
+                      <strong>{activeSync.currentDayDate || 'em curso'}</strong> (
+                      {activeSync.processedDays ?? 0} de {activeSync.totalDays ?? '?'} dias
+                      verificados). Todos os <strong>{activeSync.imported}</strong> cliente(s)
+                      processados ({activeSync.createdCount} novos, {activeSync.updatedCount}{' '}
+                      atualizados) foram preservados com sucesso no banco.
+                    </>
+                  ) : (
+                    <>
+                      Todos os <strong>{activeSync.imported}</strong> cliente(s) importados até a
+                      parada ({activeSync.createdCount} novos, {activeSync.updatedCount}{' '}
+                      atualizados) foram preservados com sucesso no banco.
+                    </>
+                  )}
                 </span>
               </div>
             )}

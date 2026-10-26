@@ -53,11 +53,18 @@ export const clientsService = {
     return await pb.collection('clients').delete(id)
   },
 
-  async startFlexSmartSync(options?: { date?: string; fullSync?: boolean }): Promise<{
+  async startFlexSmartSync(options?: {
+    date?: string
+    fullSync?: boolean
+    mode?: 'single_date' | 'day_by_day'
+  }): Promise<{
     success: boolean
     syncId: string
     status: string
     targetDate?: string
+    syncStartDate?: string
+    totalDays?: number
+    syncMode?: string
     isFullSync?: boolean
     message: string
   }> {
@@ -66,6 +73,9 @@ export const clientsService = {
       syncId: string
       status: string
       targetDate?: string
+      syncStartDate?: string
+      totalDays?: number
+      syncMode?: string
       isFullSync?: boolean
       message: string
     }>('/backend/v1/flexsmart/start-sync', {

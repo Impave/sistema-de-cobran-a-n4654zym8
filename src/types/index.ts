@@ -52,6 +52,11 @@ export interface FlexSmartSyncStatus {
   percent: number
   error?: string
   syncDate?: string
+  syncStartDate?: string
+  totalDays?: number
+  processedDays?: number
+  currentDayDate?: string
+  syncMode?: 'single_date' | 'day_by_day' | string
   isFullSync?: boolean
   nextIncrementalDate?: string
   yesterdayDate?: string

@@ -20,7 +20,7 @@ import {
   StopCircle,
   Ban,
   ChevronDown,
-  History,
+  Calendar,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -440,28 +440,30 @@ export default function ClientsPage() {
     }
   }
 
-  // Sincronização com o ERP FlexSmart (incremental ou completa "do zero")
-  const handleSyncFlexSmart = async (fullSync = false) => {
+  // Sincronização manual com o ERP FlexSmart usando sempre a data de ontem
+  const handleSyncFlexSmart = async (customDate?: string) => {
     setSyncLoading(true)
     try {
-      const res = await clientsService.startFlexSmartSync({ fullSync })
+      const res = await clientsService.startFlexSmartSync(
+        customDate ? { date: customDate } : undefined,
+      )
       if (res.syncId) {
-        const targetDate = res.targetDate || (fullSync ? '01/01/2000' : 'última sincronização')
+        const targetDate = res.targetDate || 'ontem'
         setActiveSync({
           id: res.syncId,
           status: 'pending',
-          currentStep: `Iniciando importação do ERP (desde ${targetDate})...`,
+          currentStep: `Buscando clientes alterados desde ${targetDate} no ERP...`,
           count: 0,
           imported: 0,
           createdCount: 0,
           updatedCount: 0,
           percent: 0,
           syncDate: targetDate,
-          isFullSync: fullSync || targetDate === '01/01/2000',
+          isFullSync: false,
         })
         toast({
-          title: fullSync ? 'Importação completa iniciada' : 'Sincronização incremental iniciada',
-          description: `Buscando clientes alterados desde ${targetDate} em segundo plano.`,
+          title: 'Importação do ERP iniciada',
+          description: `Buscando clientes alterados desde ${targetDate} em segundo plano. Clientes existentes serão atualizados.`,
         })
       }
     } catch (err: unknown) {
@@ -512,12 +514,12 @@ export default function ClientsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-          {/* Botão de sincronização com dropdown de opções (Incremental / Do Zero) */}
+          {/* Botão de importação manual do ERP FlexSmart (botão único e simples com busca a partir de ontem) */}
           <div className="inline-flex rounded-lg shadow-xs">
             <Button
               type="button"
               variant="outline"
-              onClick={() => handleSyncFlexSmart(false)}
+              onClick={() => handleSyncFlexSmart()}
               disabled={
                 syncLoading ||
                 loading ||
@@ -528,9 +530,9 @@ export default function ClientsPage() {
               }
               className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium rounded-r-none"
               title={
-                activeSync?.nextIncrementalDate
-                  ? `Sincronizar clientes alterados desde ${activeSync.nextIncrementalDate}`
-                  : 'Sincronizar clientes alterados a partir do ERP FlexSmart'
+                activeSync?.yesterdayDate
+                  ? `Buscar clientes alterados desde ${activeSync.yesterdayDate} no ERP FlexSmart`
+                  : 'Buscar clientes alterados a partir da data de ontem no ERP FlexSmart'
               }
             >
               {cancellingSync || activeSync?.status === 'cancelling' ? (
@@ -549,12 +551,11 @@ export default function ClientsPage() {
                 <>
                   <RefreshCw className="w-4 h-4 mr-1.5 text-indigo-600" />
                   <span>Importar do ERP FlexSmart</span>
-                  {activeSync?.nextIncrementalDate &&
-                    activeSync.nextIncrementalDate !== '01/01/2000' && (
-                      <span className="hidden md:inline ml-1 text-xs text-slate-400 font-normal">
-                        (desde {activeSync.nextIncrementalDate})
-                      </span>
-                    )}
+                  {activeSync?.yesterdayDate && (
+                    <span className="hidden md:inline ml-1 text-xs text-slate-400 font-normal">
+                      (desde {activeSync.yesterdayDate})
+                    </span>
+                  )}
                 </>
               )}
             </Button>
@@ -574,43 +575,45 @@ export default function ClientsPage() {
                     activeSync?.status === 'cancelling'
                   }
                   className="border-l-0 border-slate-300 text-slate-700 hover:bg-slate-50 rounded-l-none px-2"
-                  title="Mais opções de importação do ERP"
+                  title="Opções de busca no ERP"
                 >
                   <ChevronDown className="w-4 h-4 text-slate-500" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuContent align="end" className="w-72">
                 <DropdownMenuLabel className="text-xs text-slate-500 font-medium">
-                  Modos de sincronização ERP
+                  Filtro de busca por data
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => handleSyncFlexSmart(false)}
+                  onClick={() => handleSyncFlexSmart()}
                   className="cursor-pointer text-xs py-2"
                 >
                   <div className="flex flex-col gap-0.5">
                     <span className="font-medium text-slate-800 flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
-                      Importação Incremental (Padrão)
+                      Buscar desde ontem (Padrão)
                     </span>
                     <span className="text-[11px] text-slate-500">
-                      {activeSync?.nextIncrementalDate
-                        ? `Busca clientes alterados desde ${activeSync.nextIncrementalDate}`
-                        : 'Busca clientes alterados desde a última importação'}
+                      {activeSync?.yesterdayDate
+                        ? `Clientes alterados a partir de ${activeSync.yesterdayDate}`
+                        : 'Busca clientes alterados a partir do dia anterior'}
                     </span>
                   </div>
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => handleSyncFlexSmart(true)}
+                  onClick={() => handleSyncFlexSmart(activeSync?.todayDate)}
                   className="cursor-pointer text-xs py-2 text-indigo-950"
                 >
                   <div className="flex flex-col gap-0.5">
                     <span className="font-medium text-indigo-600 flex items-center gap-1.5">
-                      <History className="w-3.5 h-3.5" />
-                      Importar tudo do zero
+                      <Calendar className="w-3.5 h-3.5" />
+                      Buscar pela data de hoje
                     </span>
                     <span className="text-[11px] text-slate-500">
-                      Busca todo o histórico de clientes cadastrados no ERP
+                      {activeSync?.todayDate
+                        ? `Clientes alterados a partir de hoje (${activeSync.todayDate})`
+                        : 'Busca apenas clientes alterados no dia corrente'}
                     </span>
                   </div>
                 </DropdownMenuItem>

@@ -2,18 +2,21 @@
 // 1. POST /login com username/password dos segredos -> access_token
 // 2. Cache em memória do token ($app.store()) com re-login automático em caso de 401/403
 // 3. GET /Cliente/getByDtAtz?data=DD/MM/AAAA com header AuthToken: <access_token>
-// 4. Sincronização incremental: busca clientes alterados desde a última sincronização bem-sucedida
-//    ou desde data base (01/01/2000) quando for importação completa ("do zero").
-// 5. Mapeamento e deduplicação (erp_code e CPF/CNPJ) na coleção clients para o usuário autenticado
+// 4. Busca usando SEMPRE a data de ONTEM (dia corrente menos 1 dia, DD/MM/AAAA).
+//    Garante que clientes alterados no dia anterior e posterior sejam cobertos sem depender
+//    de sincronizações passadas nem da data 01/01/2000.
+// 5. Mapeamento e deduplicação (erp_code e CPF/CNPJ) na coleção clients para o usuário autenticado:
+//    - Se já existe: ATUALIZA os dados cadastrais
+//    - Se não existe: CRIA o novo cliente
 // 6. Execução em segundo plano com gravação de progresso em lotes na coleção `flex_sync`
 // 7. Rotas:
-//    - POST /backend/v1/flexsmart/start-sync -> dispara o job assíncrono (aceita { fullSync: boolean, date: string })
+//    - POST /backend/v1/flexsmart/start-sync -> dispara o job assíncrono (usa data de ontem por padrão, aceita { date: string } se fornecido)
 //    - POST /backend/v1/flexsmart/cancel-sync/{id} -> solicita interrupção do job assíncrono
 //    - GET  /backend/v1/flexsmart/sync-status/{id} -> retorna o status do job (total, processados, criados, atualizados, erros)
 //    - GET  /backend/v1/flexsmart/last-sync -> retorna o último job de sincronização do usuário
 //    - GET  /backend/v1/flexsmart/test-by-date -> teste de diagnóstico para verificar resposta de /Cliente/getByDtAtz
 //    - POST /backend/v1/flexsmart/test-login -> teste de login
-//    - POST /backend/v1/flexsmart/sync -> rota síncrona mantida por retrocompatibilidade
+//    - POST /backend/v1/flexsmart/sync -> rota síncrona mantida por retrocompatibilidade (usa ontem)
 //
 // NOTA CRÍTICA: Sincronização estritamente MANUAL a pedido do usuário (sem cron / sem execução automática).
 // Jamais registrar nenhum cron/automação para o FlexSmart.
@@ -41,25 +44,16 @@ routerAdd(
         return e.json(401, { error: 'Usuário não autenticado' })
       }
 
-      function formatCurrentDateBR() {
+      function getYesterdayBR() {
         const d = new Date()
+        d.setDate(d.getDate() - 1)
         const day = String(d.getDate()).padStart(2, '0')
         const month = String(d.getMonth() + 1).padStart(2, '0')
         const year = d.getFullYear()
         return day + '/' + month + '/' + year
       }
 
-      function formatDateToBR(dateObj) {
-        if (!dateObj) return ''
-        const d = new Date(dateObj)
-        if (isNaN(d.getTime())) return ''
-        const day = String(d.getDate()).padStart(2, '0')
-        const month = String(d.getMonth() + 1).padStart(2, '0')
-        const year = d.getFullYear()
-        return day + '/' + month + '/' + year
-      }
-
-      // Lê parâmetros enviados no corpo se houver (fullSync: boolean, date: string)
+      // Lê parâmetros enviados no corpo se houver ({ date?: string })
       let reqBody = {}
       try {
         const rawBody = e.request.body ? e.request.body.readAll() : null
@@ -68,38 +62,13 @@ routerAdd(
         }
       } catch (_) {}
 
-      const isFullSyncRequested = reqBody.fullSync === true
-
+      // Lógica de data: usa sempre a data de ONTEM por padrão
+      // Se enviado explicitamente reqBody.date, usa a data informada (ex.: data de hoje).
       let targetDate = ''
       if (reqBody.date && typeof reqBody.date === 'string' && reqBody.date.trim()) {
         targetDate = reqBody.date.trim()
-      } else if (isFullSyncRequested) {
-        targetDate = '01/01/2000'
       } else {
-        try {
-          const lastSuccessful = $app.findRecordsByFilter(
-            'flex_sync',
-            'owner = {:owner} && status = "done"',
-            '-created',
-            1,
-            0,
-            { owner: ownerId },
-          )
-          if (lastSuccessful.length > 0) {
-            const rec = lastSuccessful[0]
-            const savedSyncDate = rec.getString('sync_date')
-            if (savedSyncDate && savedSyncDate.length >= 8) {
-              targetDate = savedSyncDate
-            } else {
-              const startedAt = rec.getString('started_at') || rec.getString('created')
-              targetDate = formatDateToBR(startedAt)
-            }
-          }
-        } catch (_) {}
-
-        if (!targetDate) {
-          targetDate = '01/01/2000'
-        }
+        targetDate = getYesterdayBR()
       }
 
       // Limpa/finaliza jobs antigos que ficaram travados
@@ -141,8 +110,8 @@ routerAdd(
       syncRec.set('created_count', 0)
       syncRec.set('updated_count', 0)
       syncRec.set('sync_date', targetDate)
-      syncRec.set('is_full_sync', isFullSyncRequested || targetDate === '01/01/2000')
-      syncRec.set('current_step', 'Iniciando sincronização (desde ' + targetDate + ')...')
+      syncRec.set('is_full_sync', false)
+      syncRec.set('current_step', 'Iniciando importação (data base: ' + targetDate + ')...')
       $app.save(syncRec)
 
       const syncId = syncRec.id
@@ -509,8 +478,8 @@ routerAdd(
 
           if (totalErp === 0) {
             jobRec.set('status', 'done')
-            jobRec.set('current_step', 'Nenhum cliente alterado desde ' + targetDate + '.')
-            jobRec.set('sync_date', formatCurrentDateBR())
+            jobRec.set('current_step', 'Nenhum cliente retornado para a data ' + targetDate + '.')
+            jobRec.set('sync_date', targetDate)
             jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(jobRec)
             console.log(
@@ -807,15 +776,20 @@ routerAdd(
             return
           }
 
-          const todayBR = formatCurrentDateBR()
           jobRec.set('status', 'done')
           jobRec.set('imported', totalErp)
           jobRec.set('created_count', createdCount)
           jobRec.set('updated_count', updatedCount)
-          jobRec.set('sync_date', todayBR)
+          jobRec.set('sync_date', targetDate)
           jobRec.set(
             'current_step',
-            'Concluído! ' + createdCount + ' novos, ' + updatedCount + ' atualizados.',
+            'Concluído! ' +
+              createdCount +
+              ' novos, ' +
+              updatedCount +
+              ' atualizados (data base ' +
+              targetDate +
+              ').',
           )
           jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(jobRec)
@@ -830,7 +804,7 @@ routerAdd(
               ', atualizados=' +
               updatedCount +
               ', sync_date=' +
-              todayBR,
+              targetDate,
           )
         } catch (err) {
           const msg = err && err.message ? err.message : String(err)
@@ -865,8 +839,9 @@ routerAdd(
         syncId: syncId,
         status: 'pending',
         targetDate: targetDate,
-        isFullSync: isFullSyncRequested || targetDate === '01/01/2000',
-        message: 'Importação iniciada com sucesso em segundo plano (desde ' + targetDate + ').',
+        isFullSync: false,
+        message:
+          'Importação iniciada com sucesso em segundo plano (data base: ' + targetDate + ').',
       })
     } catch (err) {
       const msg = err && err.message ? err.message : String(err)
@@ -1133,22 +1108,25 @@ routerAdd(
       const imported = rec.getInt('imported')
       const progressPercent = total > 0 ? Math.min(100, Math.round((imported / total) * 100)) : 0
 
-      let nextIncrementalDate = '01/01/2000'
-      try {
-        const lastSuccess = $app.findRecordsByFilter(
-          'flex_sync',
-          'owner = {:owner} && status = "done"',
-          '-created',
-          1,
-          0,
-          { owner: ownerId },
-        )
-        if (lastSuccess.length > 0) {
-          const ls = lastSuccess[0]
-          nextIncrementalDate =
-            ls.getString('sync_date') || formatDateToBR(ls.getString('started_at')) || '01/01/2000'
-        }
-      } catch (_) {}
+      function getYesterdayBR() {
+        const d = new Date()
+        d.setDate(d.getDate() - 1)
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        return day + '/' + month + '/' + year
+      }
+
+      function getTodayBR() {
+        const d = new Date()
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        return day + '/' + month + '/' + year
+      }
+
+      const yesterdayDate = getYesterdayBR()
+      const todayDate = getTodayBR()
 
       return e.json(200, {
         lastSync: {
@@ -1161,9 +1139,10 @@ routerAdd(
           updatedCount: rec.getInt('updated_count'),
           percent: progressPercent,
           error: rec.getString('error'),
-          syncDate: rec.getString('sync_date'),
+          syncDate: rec.getString('sync_date') || yesterdayDate,
           isFullSync: rec.getBool('is_full_sync'),
-          nextIncrementalDate: nextIncrementalDate,
+          yesterdayDate: yesterdayDate,
+          todayDate: todayDate,
           startedAt: rec.getString('started_at'),
           finishedAt: rec.getString('finished_at'),
           created: rec.getString('created'),
@@ -1375,7 +1354,16 @@ routerAdd(
         'https://api.impave.com.br:8443'
       const base = rawBase.replace(/\/+$/, '')
 
-      const targetDate = '01/01/2000'
+      function getYesterdayBR() {
+        const d = new Date()
+        d.setDate(d.getDate() - 1)
+        const day = String(d.getDate()).padStart(2, '0')
+        const month = String(d.getMonth() + 1).padStart(2, '0')
+        const year = d.getFullYear()
+        return day + '/' + month + '/' + year
+      }
+
+      const targetDate = getYesterdayBR()
       const r = $http.send({
         url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(targetDate),
         method: 'GET',

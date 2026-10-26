@@ -53,7 +53,7 @@ export const clientsService = {
     return await pb.collection('clients').delete(id)
   },
 
-  async startFlexSmartSync(options?: { fullSync?: boolean; date?: string }): Promise<{
+  async startFlexSmartSync(options?: { date?: string; fullSync?: boolean }): Promise<{
     success: boolean
     syncId: string
     status: string

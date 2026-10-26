@@ -54,6 +54,8 @@ export interface FlexSmartSyncStatus {
   syncDate?: string
   isFullSync?: boolean
   nextIncrementalDate?: string
+  yesterdayDate?: string
+  todayDate?: string
   startedAt?: string
   finishedAt?: string
   created?: string

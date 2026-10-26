@@ -55,6 +55,7 @@ export const clientsService = {
 
   async startFlexSmartSync(options?: {
     date?: string
+    startDate?: string
     fullSync?: boolean
     mode?: 'single_date' | 'day_by_day'
   }): Promise<{

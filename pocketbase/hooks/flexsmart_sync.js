@@ -128,22 +128,38 @@ routerAdd(
       } catch (_) {}
 
       const isDayByDay = reqBody.mode === 'day_by_day'
-      const fixedStartDate = '01/09/2026'
+      const defaultStartDate = '01/09/2026'
       const todayStr = getTodayBRHelper()
       const yesterdayStr = getYesterdayBRHelper()
+
+      // Converte YYYY-MM-DD para DD/MM/AAAA se vier no formato ISO do datepicker
+      function normalizeToBRDate(str) {
+        if (!str || typeof str !== 'string') return ''
+        const trimmed = str.trim()
+        if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+          const parts = trimmed.split('-')
+          return parts[2] + '/' + parts[1] + '/' + parts[0]
+        }
+        if (/^\d{2}\/\d{2}\/\d{4}$/.test(trimmed)) {
+          return trimmed
+        }
+        return trimmed
+      }
 
       let targetDate = ''
       let syncStartDate = ''
       let totalDays = 1
 
       if (isDayByDay) {
-        syncStartDate = fixedStartDate
+        // Se o usuário passou uma data inicial (startDate ou date), usa ela; senão usa defaultStartDate
+        const userStart = normalizeToBRDate(reqBody.startDate || reqBody.date)
+        syncStartDate = userStart || defaultStartDate
         targetDate = todayStr
-        const dateList = generateDateRangeBRHelper(fixedStartDate, new Date())
+        const dateList = generateDateRangeBRHelper(syncStartDate, new Date())
         totalDays = Math.max(1, dateList.length)
       } else {
         if (reqBody.date && typeof reqBody.date === 'string' && reqBody.date.trim()) {
-          targetDate = reqBody.date.trim()
+          targetDate = normalizeToBRDate(reqBody.date.trim())
         } else {
           targetDate = yesterdayStr
         }
@@ -193,14 +209,14 @@ routerAdd(
       syncRec.set('sync_start_date', syncStartDate)
       syncRec.set('total_days', totalDays)
       syncRec.set('processed_days', 0)
-      syncRec.set('current_day_date', isDayByDay ? fixedStartDate : targetDate)
+      syncRec.set('current_day_date', isDayByDay ? syncStartDate : targetDate)
       syncRec.set('sync_mode', isDayByDay ? 'day_by_day' : 'single_date')
       syncRec.set('is_full_sync', isDayByDay)
       syncRec.set(
         'current_step',
         isDayByDay
-          ? 'Iniciando carga completa dia a dia (' +
-              fixedStartDate +
+          ? 'Iniciando carga dia a dia (' +
+              syncStartDate +
               ' → ' +
               todayStr +
               ', ' +
@@ -634,10 +650,15 @@ routerAdd(
             rec.set('document', docClean)
           }
 
-          if (emailRaw && emailRaw.indexOf('@') > 0) {
-            // Garante que o email seja válido segundo regex básico antes de atribuir para evitar rejeição por validação do PB
-            const emailTrimmed = emailRaw.trim()
-            if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+          if (emailRaw && typeof emailRaw === 'string' && emailRaw.indexOf('@') > 0) {
+            // PocketBase valida email com checagem rigorosa de formato
+            // Limpa espaços e valida formato completo: texto@dominio.tld
+            const emailTrimmed = emailRaw.trim().toLowerCase()
+            const emailValid =
+              /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(
+                emailTrimmed,
+              )
+            if (emailValid && emailTrimmed.length <= 254) {
               rec.set('email', emailTrimmed)
             }
           }
@@ -716,10 +737,22 @@ routerAdd(
 
           if (isDayByDay) {
             // ==========================================
-            // MODO CARGA COMPLETA DIA A DIA (01/09/2026 -> HOJE)
+            // MODO CARGA COMPLETA DIA A DIA (DATA ESCOLHIDA -> HOJE)
             // ==========================================
-            const datesToProcess = generateDateRangeBRHelper(fixedStartDate, new Date())
+            const datesToProcess = generateDateRangeBRHelper(syncStartDate, new Date())
             const countDays = datesToProcess.length
+
+            console.log(
+              '[FlexSmart ' +
+                syncId +
+                '] Iniciando carga dia a dia: de ' +
+                syncStartDate +
+                ' até ' +
+                todayStr +
+                ' (' +
+                countDays +
+                ' dias)',
+            )
 
             jobRec.set('total_days', countDays)
             jobRec.set('processed_days', 0)
@@ -820,6 +853,10 @@ routerAdd(
                 } catch (_) {}
               }
 
+              let dayCreatedCount = 0
+              let dayUpdatedCount = 0
+              let dayErrorCount = 0
+
               // 3. Processa cada cliente do array retornado no dia
               for (let cIdx = 0; cIdx < countInDay; cIdx++) {
                 // Checa cancelamento a cada 20 registros
@@ -853,21 +890,52 @@ routerAdd(
                   )
                   if (resType === 'updated') {
                     updatedCount++
+                    dayUpdatedCount++
                   } else {
                     createdCount++
+                    dayCreatedCount++
                   }
                   totalImportedCount++
                 } catch (saveErr) {
+                  dayErrorCount++
                   console.log(
                     '[FlexSmart ' +
                       syncId +
-                      '] Erro ao salvar cliente na data ' +
+                      '] Erro ao salvar cliente #' +
+                      cIdx +
+                      ' na data ' +
                       currentDayStr +
                       ': ' +
                       String(saveErr),
                   )
                 }
               }
+
+              // Log explícito por dia exigido pelo usuário:
+              // total retornado pelo ERP e resultado do upsert (X criados, Y atualizados)
+              console.log(
+                '[FlexSmart ' +
+                  syncId +
+                  '] [Dia ' +
+                  currentDayStr +
+                  '] ERP retornado: ' +
+                  countInDay +
+                  ' registros | Upsert: ' +
+                  dayCreatedCount +
+                  ' criados, ' +
+                  dayUpdatedCount +
+                  ' atualizados' +
+                  (dayErrorCount > 0 ? ', ' + dayErrorCount + ' erros' : '') +
+                  ' | Acumulado: ' +
+                  createdCount +
+                  ' criados, ' +
+                  updatedCount +
+                  ' atualizados (' +
+                  (dayIndex + 1) +
+                  '/' +
+                  countDays +
+                  ' dias)',
+              )
 
               if (wasCancelled) {
                 break
@@ -885,7 +953,9 @@ routerAdd(
                   'current_step',
                   'Dia ' +
                     currentDayStr +
-                    ' concluído — ' +
+                    ' concluído (' +
+                    countInDay +
+                    ' no ERP) — ' +
                     processedDaysCount +
                     ' de ' +
                     countDays +
@@ -1159,11 +1229,13 @@ routerAdd(
         syncMode: isDayByDay ? 'day_by_day' : 'single_date',
         isFullSync: isDayByDay,
         message: isDayByDay
-          ? 'Carga completa dia a dia iniciada com sucesso (' +
-            fixedStartDate +
+          ? 'Carga dia a dia iniciada com sucesso (' +
+            syncStartDate +
             ' → ' +
             todayStr +
-            ').'
+            ', ' +
+            totalDays +
+            ' dias).'
           : 'Importação iniciada com sucesso em segundo plano (data base: ' + targetDate + ').',
       })
     } catch (err) {

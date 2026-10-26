@@ -84,6 +84,10 @@ export default function ClientsPage() {
   const [cancellingSync, setCancellingSync] = useState(false)
   const [activeSync, setActiveSync] = useState<FlexSmartSyncStatus | null>(null)
 
+  // Estado para o diálogo de seleção de data inicial para carga dia a dia
+  const [isDatePickerDialogOpen, setIsDatePickerDialogOpen] = useState(false)
+  const [selectedStartDate, setSelectedStartDate] = useState('2026-09-01')
+
   const { toast } = useToast()
 
   const loadData = useCallback(async () => {
@@ -446,9 +450,20 @@ export default function ClientsPage() {
     }
   }
 
+  // Converte YYYY-MM-DD para DD/MM/AAAA para exibição amigável
+  const formatISOToBR = (iso: string) => {
+    if (!iso) return ''
+    const parts = iso.split('-')
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`
+    }
+    return iso
+  }
+
   // Sincronização manual com o ERP FlexSmart
   const handleSyncFlexSmart = async (options?: {
     date?: string
+    startDate?: string
     mode?: 'single_date' | 'day_by_day'
   }) => {
     setSyncLoading(true)
@@ -458,6 +473,7 @@ export default function ClientsPage() {
         options
           ? {
               date: options.date,
+              startDate: options.startDate,
               mode: options.mode,
             }
           : undefined,
@@ -466,11 +482,14 @@ export default function ClientsPage() {
         const targetDate = res.targetDate || 'ontem'
         const isDayByDayMode = res.syncMode === 'day_by_day' || isDayByDay
         const totalDays = res.totalDays || 1
+        const initialDateStr =
+          res.syncStartDate ||
+          (options?.startDate ? formatISOToBR(options.startDate) : '01/09/2026')
         setActiveSync({
           id: res.syncId,
           status: 'pending',
           currentStep: isDayByDayMode
-            ? `Iniciando carga completa dia a dia (01/09/2026 → hoje, ${totalDays} dias)...`
+            ? `Iniciando carga dia a dia (${initialDateStr} → hoje, ${totalDays} dias)...`
             : `Buscando clientes alterados desde ${targetDate} no ERP...`,
           count: 0,
           imported: 0,
@@ -478,17 +497,17 @@ export default function ClientsPage() {
           updatedCount: 0,
           percent: 0,
           syncDate: targetDate,
-          syncStartDate: res.syncStartDate || (isDayByDayMode ? '01/09/2026' : targetDate),
+          syncStartDate: initialDateStr,
           totalDays: totalDays,
           processedDays: 0,
-          currentDayDate: isDayByDayMode ? '01/09/2026' : targetDate,
+          currentDayDate: isDayByDayMode ? initialDateStr : targetDate,
           syncMode: isDayByDayMode ? 'day_by_day' : 'single_date',
           isFullSync: isDayByDayMode,
         })
         toast({
-          title: isDayByDayMode ? 'Carga completa iniciada' : 'Importação do ERP iniciada',
+          title: isDayByDayMode ? 'Carga dia a dia iniciada' : 'Importação do ERP iniciada',
           description: isDayByDayMode
-            ? `Carga completa dia a dia iniciada (01/09/2026 → hoje). ${totalDays} dias serão verificados sequencialmente.`
+            ? `Carga dia a dia iniciada (${initialDateStr} → hoje). ${totalDays} dias serão verificados sequencialmente.`
             : `Buscando clientes alterados desde ${targetDate} em segundo plano. Clientes existentes serão atualizados.`,
         })
       }
@@ -645,18 +664,28 @@ export default function ClientsPage() {
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => handleSyncFlexSmart({ mode: 'day_by_day' })}
+                  onClick={() => setIsDatePickerDialogOpen(true)}
                   className="cursor-pointer text-xs py-2 bg-indigo-50/50 hover:bg-indigo-50"
                 >
                   <div className="flex flex-col gap-0.5">
                     <span className="font-semibold text-indigo-700 flex items-center gap-1.5">
                       <Database className="w-3.5 h-3.5 text-indigo-600" />
-                      Carga completa dia a dia (01/09/2026 → hoje)
+                      Carga dia a dia (selecionar data inicial...)
                     </span>
                     <span className="text-[11px] text-slate-600">
-                      Itera dia a dia desde 01/09/2026 até hoje com upsert de clientes.
+                      Escolha a data inicial e execute a carga dia a dia até hoje.
                     </span>
                   </div>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() =>
+                    handleSyncFlexSmart({ mode: 'day_by_day', startDate: '01/09/2026' })
+                  }
+                  className="cursor-pointer text-xs py-1.5 text-slate-600 hover:text-slate-900"
+                >
+                  <span className="text-[11px] text-slate-500 pl-5">
+                    Ou iniciar direto desde 01/09/2026 → hoje
+                  </span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -797,7 +826,7 @@ export default function ClientsPage() {
                     {activeSync.syncMode === 'day_by_day' || activeSync.isFullSync ? (
                       <>
                         {activeSync.status === 'done'
-                          ? `Todos os ${activeSync.totalDays ?? activeSync.processedDays ?? 0} dias concluídos (01/09/2026 → hoje)`
+                          ? `Todos os ${activeSync.totalDays ?? activeSync.processedDays ?? 0} dias concluídos (${activeSync.syncStartDate || 'início'} → hoje)`
                           : activeSync.currentDayDate
                             ? `Dia ${activeSync.currentDayDate} — ${
                                 activeSync.status === 'running'
@@ -1317,6 +1346,142 @@ export default function ClientsPage() {
               ) : (
                 'Excluir'
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Modal para Selecionar Data Inicial da Carga Dia a Dia */}
+      <Dialog open={isDatePickerDialogOpen} onOpenChange={setIsDatePickerDialogOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl">
+          <DialogHeader>
+            <div className="w-10 h-10 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mb-2 border border-indigo-100">
+              <Calendar className="w-5 h-5" />
+            </div>
+            <DialogTitle className="text-base font-bold text-slate-900">
+              Carga dia a dia — Selecionar data inicial
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-500">
+              Escolha a data de início da carga. O sistema buscará os clientes alterados dia a dia,
+              em ordem cronológica sequencial, desde esta data até hoje.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div>
+              <Label htmlFor="start-date-input" className="text-xs font-semibold text-slate-700">
+                Data inicial
+              </Label>
+              <Input
+                id="start-date-input"
+                type="date"
+                value={selectedStartDate}
+                max={
+                  activeSync?.todayDate
+                    ? activeSync.todayDate.split('/').reverse().join('-')
+                    : new Date().toISOString().split('T')[0]
+                }
+                onChange={(e) => setSelectedStartDate(e.target.value)}
+                className="mt-1 text-sm"
+              />
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                Data selecionada:{' '}
+                <strong className="text-slate-700">{formatISOToBR(selectedStartDate)}</strong> → até{' '}
+                <strong className="text-slate-700">{activeSync?.todayDate || 'hoje'}</strong>
+              </p>
+            </div>
+
+            {/* Atalhos rápidos de data */}
+            <div className="space-y-1.5">
+              <span className="text-[11px] font-semibold text-slate-600 block">
+                Atalhos rápidos:
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedStartDate('2026-09-01')}
+                  className="text-xs h-7 px-2.5 bg-slate-50 hover:bg-slate-100"
+                >
+                  01/09/2026 (Início de Setembro)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSelectedStartDate('2026-10-01')}
+                  className="text-xs h-7 px-2.5 bg-slate-50 hover:bg-slate-100"
+                >
+                  01/10/2026 (Início de Outubro)
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const d = new Date()
+                    d.setDate(d.getDate() - 7)
+                    setSelectedStartDate(d.toISOString().split('T')[0])
+                  }}
+                  className="text-xs h-7 px-2.5 bg-slate-50 hover:bg-slate-100"
+                >
+                  Últimos 7 dias
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const d = new Date()
+                    d.setDate(d.getDate() - 30)
+                    setSelectedStartDate(d.toISOString().split('T')[0])
+                  }}
+                  className="text-xs h-7 px-2.5 bg-slate-50 hover:bg-slate-100"
+                >
+                  Últimos 30 dias
+                </Button>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-800 space-y-1">
+              <p className="font-medium flex items-center gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                Como funciona a carga dia a dia:
+              </p>
+              <ul className="list-disc pl-4 space-y-0.5 text-[11px] text-amber-900/90">
+                <li>Faz uma requisição ao ERP para cada dia do período selecionado.</li>
+                <li>Clientes existentes são atualizados; novos são cadastrados.</li>
+                <li>
+                  Você pode acompanhar a barra de progresso e interromper a qualquer momento sem
+                  perder dados.
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsDatePickerDialogOpen(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="button"
+              onClick={() => {
+                const brDate = formatISOToBR(selectedStartDate)
+                setIsDatePickerDialogOpen(false)
+                handleSyncFlexSmart({
+                  mode: 'day_by_day',
+                  startDate: brDate,
+                })
+              }}
+              disabled={!selectedStartDate}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-medium"
+            >
+              <Database className="w-4 h-4 mr-1.5" />
+              Iniciar Carga Dia a Dia
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -318,7 +318,21 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
   )
   $app.save(syncRecord)
 
-  // Realizar Login no ERP
+  // Função utilitária de espera síncrona segura no JSVM
+  const delayMs = (ms) => {
+    try {
+      if (typeof sleep === 'function') {
+        sleep(ms)
+        return
+      }
+    } catch (_) {}
+    const start = Date.now()
+    while (Date.now() - start < ms) {
+      // laço síncrono de espera caso a global sleep não esteja exposta no runtime
+    }
+  }
+
+  // Realizar Login no ERP com retentativas resilientes (até 3 tentativas)
   const username =
     $os.getenv('FLEXSMART_USERNAME') ||
     ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '') ||
@@ -334,46 +348,97 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
   const base = rawBase.replace(/\/+$/, '')
 
   let token = ''
-  try {
-    const loginRes = $http.send({
-      url: base + '/login?Content-Type=application/json',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: username, password: password }),
-      timeout: 30,
-    })
+  let lastLoginError = ''
+  const maxLoginAttempts = 3
+  const loginWaitTimesMs = [5000, 10000]
 
-    let pj = loginRes.json
-    if (!pj && loginRes.raw) {
-      try {
-        pj = JSON.parse(loginRes.raw)
-      } catch (_) {}
+  for (let attempt = 1; attempt <= maxLoginAttempts; attempt++) {
+    try {
+      console.log(
+        '[FlexSmart step-sync] Tentativa ' +
+          attempt +
+          '/' +
+          maxLoginAttempts +
+          ' de login no ERP FlexSmart (timeout 120s)...',
+      )
+      const loginRes = $http.send({
+        url: base + '/login?Content-Type=application/json',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+        timeout: 120,
+      })
+
+      // Se retornou código HTTP com erro
+      if (loginRes.statusCode !== 200) {
+        lastLoginError = 'HTTP ' + loginRes.statusCode + (loginRes.raw ? ': ' + loginRes.raw : '')
+        console.log(
+          '[FlexSmart step-sync] Resposta de login do ERP diferente de 200: ' + lastLoginError,
+        )
+        // Erro 401 ou 400 indica credenciais inválidas ou erro de requisição do cliente: não adianta retentar
+        if (
+          loginRes.statusCode === 401 ||
+          loginRes.statusCode === 400 ||
+          loginRes.statusCode === 403
+        ) {
+          break
+        }
+      } else {
+        let pj = loginRes.json
+        if (!pj && loginRes.raw) {
+          try {
+            pj = JSON.parse(loginRes.raw)
+          } catch (_) {}
+        }
+        if (pj && pj.access_token) {
+          token = pj.access_token
+          break
+        } else {
+          lastLoginError = 'Resposta 200 sem access_token válido'
+        }
+      }
+    } catch (loginErr) {
+      lastLoginError = String(loginErr)
+      console.log(
+        '[FlexSmart step-sync] Falha na tentativa ' + attempt + ' de login no ERP:',
+        lastLoginError,
+      )
     }
-    if (pj && pj.access_token) {
-      token = pj.access_token
+
+    if (!token && attempt < maxLoginAttempts) {
+      const waitTime = loginWaitTimesMs[attempt - 1] || 5000
+      console.log(
+        '[FlexSmart step-sync] Aguardando ' +
+          waitTime / 1000 +
+          's antes da próxima tentativa de login no ERP...',
+      )
+      delayMs(waitTime)
     }
-  } catch (loginErr) {
-    console.log('[FlexSmart step-sync] Falha no login do ERP:', String(loginErr))
-    syncRecord.set('status', 'error')
-    syncRecord.set('error', 'Falha ao autenticar no ERP FlexSmart: ' + String(loginErr))
-    syncRecord.set('finished_at', new Date().toISOString())
-    $app.save(syncRecord)
-    return e.json(500, { success: false, status: 'error', error: 'Falha no login do ERP' })
   }
 
   if (!token) {
+    const errorMsg =
+      'Falha ao autenticar no ERP FlexSmart após ' +
+      maxLoginAttempts +
+      ' tentativas: ' +
+      lastLoginError
+    console.log('[FlexSmart step-sync] ' + errorMsg)
     syncRecord.set('status', 'error')
-    syncRecord.set('error', 'Login no ERP não retornou access_token válido.')
+    syncRecord.set('error', errorMsg)
     syncRecord.set('finished_at', new Date().toISOString())
     $app.save(syncRecord)
-    return e.json(500, { success: false, status: 'error', error: 'Token de autenticação ausente' })
+    return e.json(500, { success: false, status: 'error', error: errorMsg })
   }
 
-  // Fazer requisição GET /Cliente/getByDtAtz?data=DD/MM/AAAA
+  // Fazer requisição GET /Cliente/getByDtAtz?data=DD/MM/AAAA (timeout 120s)
   let erpItems = []
   try {
     console.log(
-      '[FlexSmart ' + syncId + '] [Dia ' + dayDateToFetch + '] Buscando clientes alterados...',
+      '[FlexSmart ' +
+        syncId +
+        '] [Dia ' +
+        dayDateToFetch +
+        '] Buscando clientes alterados (timeout 120s)...',
     )
     const fetchRes = $http.send({
       url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(dayDateToFetch),
@@ -382,7 +447,7 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
         AuthToken: token,
         Accept: 'application/json',
       },
-      timeout: 60,
+      timeout: 120,
     })
 
     if (fetchRes.statusCode !== 200) {
@@ -901,7 +966,7 @@ routerAdd('GET', '/backend/v1/flexsmart/test-by-date', (e) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: username, password: password }),
-      timeout: 30,
+      timeout: 120,
     })
 
     let pj = loginRes.json
@@ -927,7 +992,7 @@ routerAdd('GET', '/backend/v1/flexsmart/test-by-date', (e) => {
         AuthToken: token,
         Accept: 'application/json',
       },
-      timeout: 60,
+      timeout: 120,
     })
     const t1 = Date.now()
 

@@ -56,7 +56,8 @@ routerAdd(
           const ageMs = nowTime - new Date(updatedStr).getTime()
           const st = stale.getString('status')
 
-          // Se o job ficou em cancelling ou pending, ou running por mais de 3 minutos, finaliza para liberar
+          // Se o job ficou em cancelling, pending, ou running por mais de 2 minutos (120s),
+          // considera travado silenciosamente e finaliza como cancelled para não bloquear o usuário
           if (st === 'cancelling') {
             stale.set('status', 'cancelled')
             stale.set(
@@ -66,11 +67,12 @@ routerAdd(
             stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(stale)
             console.log('[FlexSmart] Job antigo em cancelling marcado como cancelled: ' + stale.id)
-          } else if (ageMs > 180000 || st === 'pending') {
+          } else if (ageMs > 120000 || st === 'pending' || st === 'running') {
+            // Qualquer job em running há mais de 120s sem alteração foi terminado silenciosamente
             stale.set('status', 'cancelled')
             stale.set(
               'current_step',
-              'Sessão anterior finalizada automaticamente para liberar nova sincronização.',
+              'Sessão anterior interrompida (o processo anterior foi finalizado pelo servidor por excesso de memória/tempo ao baixar o arquivo de 74 MB).',
             )
             stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(stale)
@@ -282,6 +284,14 @@ routerAdd(
           }
 
           // Prioridade 1: se res.json já veio decodificado pelo Go runtime
+          // DOCUMENTAÇÃO DA ESTRATÉGIA DE MEMÓRIA (GOJA / POCKETBASE):
+          // O payload do FlexSmart /Cliente/getAll contém ~74 MB de JSON em texto puro e demorou ~1m36s no Postman.
+          // Quando $http.send conclui o download no Go, `res.json` já contém a estrutura desestruturada pelo runtime Go.
+          // NUNCA chamar `JSON.parse(res.raw)` quando `res.json` estiver disponível, pois isso duplicaria os 74 MB em strings
+          // e objetos JS adicionais no heap do Goja, causando OOM instantâneo.
+          // Se `res.json` não estiver disponível e houver apenas `res.raw`, utilizamos um tokenizer/fatiador de itens
+          // ou parsing direto descartável.
+
           if (Array.isArray(res.json)) {
             console.log(
               '[FlexSmart-Async] Usando res.json nativo: ' + res.json.length + ' registros.',
@@ -334,7 +344,7 @@ routerAdd(
             }
           }
 
-          // Prioridade 2: Se res.json for null/vazio, fazer o parse de res.raw
+          // Prioridade 2: Se res.json não veio decodificado, realizar o parse de res.raw
           if (res.raw && typeof res.raw === 'string') {
             const rawLength = res.raw.length
             console.log(
@@ -367,7 +377,6 @@ routerAdd(
               }
             } catch (pErr) {
               console.log('[FlexSmart-Async] JSON.parse(res.raw) falhou: ' + String(pErr))
-              // Tenta parse seletivo de itens se o payload for muito grande
               throw new Error('Falha ao interpretar dados JSON do ERP: ' + String(pErr))
             }
           }
@@ -468,6 +477,7 @@ routerAdd(
           // Aumentamos o lote para atualizar o banco de forma eficiente
           const BATCH_SIZE = 25
 
+          // Otimização de memória: processa item e limpa a referência imediatamente no array para permitir GC
           for (let i = 0; i < totalErp; i++) {
             // ANTES de cada lote, reler o status do registro no banco para checar solicitação de cancelamento
             if (i % BATCH_SIZE === 0) {
@@ -494,6 +504,9 @@ routerAdd(
             }
 
             const item = erpList[i]
+            // Libera a referência no array para auxiliar o Garbage Collector
+            erpList[i] = null
+
             if (!item || typeof item !== 'object') {
               errorCount++
               continue
@@ -930,32 +943,55 @@ routerAdd(
 
       let currentStatus = rec.getString('status')
 
-      // Auto-recuperação: se estiver em cancelling por mais de 20 segundos sem que o loop tenha finalizado,
-      // força a transição para 'cancelled' para que nem o backend nem o frontend fiquem presos.
-      if (currentStatus === 'cancelling') {
-        const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
-        if (Date.now() - lastUpdated > 20000) {
-          try {
-            currentStatus = 'cancelled'
-            rec.set('status', 'cancelled')
-            rec.set(
-              'current_step',
-              'Importação interrompida (' +
-                rec.getInt('created_count') +
-                ' novos, ' +
-                rec.getInt('updated_count') +
-                ' atualizados).',
-            )
-            rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(rec)
-            console.log(
-              '[FlexSmart] Job ' +
-                syncId +
-                ' transicionado automaticamente de cancelling para cancelled por timeout.',
-            )
-          } catch (autoErr) {
-            console.log('[FlexSmart] Falha ao auto-cancelar: ' + String(autoErr))
-          }
+      // Auto-recuperação no sync-status:
+      // 1. Se estiver em cancelling por mais de 15s
+      // 2. Se estiver em running por mais de 120s sem nenhuma atualização (job travado/morto pelo Goja/OOM no download de 74MB)
+      const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
+      const timeSinceUpdate = Date.now() - lastUpdated
+
+      if (currentStatus === 'cancelling' && timeSinceUpdate > 15000) {
+        try {
+          currentStatus = 'cancelled'
+          rec.set('status', 'cancelled')
+          rec.set(
+            'current_step',
+            'Importação interrompida (' +
+              rec.getInt('created_count') +
+              ' novos, ' +
+              rec.getInt('updated_count') +
+              ' atualizados).',
+          )
+          rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+          $app.save(rec)
+          console.log(
+            '[FlexSmart] Job ' +
+              syncId +
+              ' transicionado automaticamente de cancelling para cancelled por timeout.',
+          )
+        } catch (autoErr) {
+          console.log('[FlexSmart] Falha ao auto-cancelar: ' + String(autoErr))
+        }
+      } else if (currentStatus === 'running' && timeSinceUpdate > 120000) {
+        try {
+          currentStatus = 'error'
+          rec.set('status', 'error')
+          rec.set(
+            'error',
+            'A requisição ao ERP FlexSmart não retornou a tempo ou a execução foi interrompida silenciosamente pelo servidor ao baixar o payload de 74 MB.',
+          )
+          rec.set(
+            'current_step',
+            'Falha: a resposta de 74 MB do ERP não pôde ser completada pelo ambiente do servidor.',
+          )
+          rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+          $app.save(rec)
+          console.log(
+            '[FlexSmart] Job ' +
+              syncId +
+              ' em running há mais de 120s sem resposta do ERP transicionado para error.',
+          )
+        } catch (autoErr) {
+          console.log('[FlexSmart] Falha ao recuperar job travado: ' + String(autoErr))
         }
       }
 
@@ -1010,25 +1046,42 @@ routerAdd(
       const rec = records[0]
       let statusVal = rec.getString('status')
 
-      // Auto-recuperação no last-sync: se estiver em cancelling ou pending por muito tempo, ajusta para cancelled
-      if (statusVal === 'cancelling') {
-        const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
-        if (Date.now() - lastUpdated > 20000) {
-          try {
-            statusVal = 'cancelled'
-            rec.set('status', 'cancelled')
-            rec.set(
-              'current_step',
-              'Importação interrompida (' +
-                rec.getInt('created_count') +
-                ' novos, ' +
-                rec.getInt('updated_count') +
-                ' atualizados).',
-            )
-            rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(rec)
-          } catch (_) {}
-        }
+      // Auto-recuperação no last-sync:
+      // 1. Se estiver em cancelling por mais de 15 segundos
+      // 2. Se estiver em running por mais de 2 minutos (120s) sem atualização (quando o Goja/PocketBase morre silenciosamente no $http.send de 74 MB)
+      const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
+      const timeSinceUpdate = Date.now() - lastUpdated
+
+      if (statusVal === 'cancelling' && timeSinceUpdate > 15000) {
+        try {
+          statusVal = 'cancelled'
+          rec.set('status', 'cancelled')
+          rec.set(
+            'current_step',
+            'Importação interrompida (' +
+              rec.getInt('created_count') +
+              ' novos, ' +
+              rec.getInt('updated_count') +
+              ' atualizados).',
+          )
+          rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+          $app.save(rec)
+        } catch (_) {}
+      } else if (statusVal === 'running' && timeSinceUpdate > 120000) {
+        try {
+          statusVal = 'error'
+          rec.set('status', 'error')
+          rec.set(
+            'error',
+            'O processo de download do ERP FlexSmart excedeu o tempo limite do servidor ou esgotou a memória ao receber o arquivo completo de ~74 MB.',
+          )
+          rec.set(
+            'current_step',
+            'Falha: o servidor encerrou o processo durante o download do grande volume de dados (74 MB).',
+          )
+          rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+          $app.save(rec)
+        } catch (_) {}
       }
 
       const total = rec.getInt('count')
@@ -1060,11 +1113,140 @@ routerAdd(
   $apis.requireAuth(),
 )
 
-// 5. Rota de teste/diagnóstico para verificar o endpoint /Cliente/getAll
+// 5. Rota de teste/diagnóstico manual para verificar download de /Cliente/getAll e parâmetros de paginação/filtro
+// Dispara teste em segundo plano para medir download/parse sem sofrer timeout do cliente HTTP (aceita GET e POST)
+routerAdd('GET', '/backend/v1/flexsmart/run-diagnostic-probe', (e) => {
+  try {
+    const queryParams = e.request.url.query()
+    const testMode = queryParams.get('test') || 'raw'
+
+    setTimeout(() => {
+      function getProbeToken() {
+        try {
+          if ($app.store && $app.store().has('flexsmart_cached_token')) {
+            const cached = $app.store().get('flexsmart_cached_token')
+            if (cached) return String(cached)
+          }
+        } catch (_) {}
+
+        const username =
+          $os.getenv('FLEXSMART_USERNAME') ||
+          ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
+        const password =
+          $os.getenv('FLEXSMART_PASSWORD') ||
+          ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
+
+        const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+        const r = $http.send({
+          url: loginUrl,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: username, password: password }),
+          timeout: 30,
+        })
+        const pj = r.json || (r.raw ? JSON.parse(r.raw) : null)
+        return pj && pj.access_token ? pj.access_token : null
+      }
+
+      const token = getProbeToken()
+      if (!token) {
+        console.log('[PROBE-BG] Falha ao obter token')
+        return
+      }
+
+      const rawBase =
+        $os.getenv('FLEXSMART_BASE_URL') ||
+        ($secrets && $secrets.has('FLEXSMART_BASE_URL')
+          ? $secrets.get('FLEXSMART_BASE_URL')
+          : '') ||
+        'https://api.impave.com.br:8443'
+      const base = rawBase.replace(/\/+$/, '')
+
+      const tStart = Date.now()
+      console.log('[PROBE-BG] Iniciando GET /Cliente/getAll...')
+      try {
+        const res = $http.send({
+          url: base + '/Cliente/getAll',
+          method: 'GET',
+          headers: { AuthToken: token, Accept: 'application/json' },
+          timeout: 300,
+        })
+        const tElapsed = ((Date.now() - tStart) / 1000).toFixed(2)
+        const rawBytes = res.raw ? res.raw.length : 0
+        const rawMB = (rawBytes / (1024 * 1024)).toFixed(2)
+
+        let isArr = false
+        let ct = 0
+        if (Array.isArray(res.json)) {
+          isArr = true
+          ct = res.json.length
+        }
+
+        console.log(
+          '[PROBE-BG] Concluído! status=' +
+            res.statusCode +
+            ' bytes=' +
+            rawBytes +
+            ' (' +
+            rawMB +
+            ' MB) dlTime=' +
+            tElapsed +
+            's isArray=' +
+            isArr +
+            ' count=' +
+            ct,
+        )
+
+        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
+        rec.set(
+          'error',
+          'PROBE_RESULT: HTTP ' +
+            res.statusCode +
+            ' | ' +
+            rawMB +
+            ' MB (' +
+            rawBytes +
+            ' bytes) em ' +
+            tElapsed +
+            's | isArray=' +
+            isArr +
+            ' count=' +
+            ct,
+        )
+        $app.save(rec)
+      } catch (eProbe) {
+        const tElapsed = ((Date.now() - tStart) / 1000).toFixed(2)
+        console.log('[PROBE-BG] Erro após ' + tElapsed + 's: ' + String(eProbe))
+        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
+        rec.set('error', 'PROBE_FAILED em ' + tElapsed + 's: ' + String(eProbe))
+        $app.save(rec)
+      }
+    }, 0)
+
+    return e.json(200, { success: true, message: 'Diagnóstico em segundo plano iniciado.' })
+  } catch (err) {
+    return e.json(500, { success: false, error: String(err) })
+  }
+})
+
+// Separa download de parse: mede tamanho de res.raw SEM fazer JSON.parse nem ler res.json quando solicitado
 routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
   try {
-    console.log('[FlexSmart-TestGetAll] Chamando /Cliente/getAll...')
+    const queryParams = e.request.url.query()
+    const testParam = queryParams.get('test') || '' // ex: 'raw', 'parse', 'probe-params'
+    console.log(
+      '[FlexSmart-TestGetAll] Iniciando diagnóstico com modo: ' + (testParam || 'default'),
+    )
+
     function getTestToken() {
+      // Reutiliza token em cache se houver
+      try {
+        if ($app.store && $app.store().has('flexsmart_cached_token')) {
+          const cached = $app.store().get('flexsmart_cached_token')
+          if (cached) return String(cached)
+        }
+      } catch (_) {}
+
       const username =
         $os.getenv('FLEXSMART_USERNAME') ||
         ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
@@ -1073,13 +1255,26 @@ routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
         ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
 
       const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-      const res = $http.send({
-        url: loginUrl,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: username, password: password }),
-        timeout: 30,
-      })
+      let res = null
+      let lastErr = null
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          res = $http.send({
+            url: loginUrl,
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: username, password: password }),
+            timeout: 20,
+          })
+          if (res) break
+        } catch (eLogin) {
+          lastErr = eLogin
+        }
+      }
+
+      if (!res) {
+        throw new Error('Falha no login após tentativas: ' + String(lastErr))
+      }
 
       let parsed = res.json
       if (!parsed && res.raw) {
@@ -1088,6 +1283,12 @@ routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
         } catch (_) {}
       }
       if (parsed && parsed.access_token) {
+        try {
+          if ($app.store) {
+            $app.store().set('flexsmart_cached_token', parsed.access_token)
+            $app.store().set('flexsmart_token_time', String(Date.now()))
+          }
+        } catch (_) {}
         return parsed.access_token
       }
       throw new Error('Falha no login: HTTP ' + res.statusCode + ' ' + (res.raw || ''))
@@ -1100,61 +1301,164 @@ routerAdd('GET', '/backend/v1/flexsmart/test-get-all', (e) => {
     const base = rawBase.replace(/\/+$/, '')
     const token = getTestToken()
 
-    const targetUrl = base + '/Cliente/getAll'
-    console.log(
-      '[FlexSmart-TestGetAll] URL: ' + targetUrl + ' com token: ' + token.slice(0, 8) + '...',
-    )
-
-    const res = $http.send({
-      url: targetUrl,
-      method: 'GET',
-      headers: {
-        AuthToken: token,
-        Accept: 'application/json',
-      },
-      timeout: 300,
-    })
-
-    console.log('[FlexSmart-TestGetAll] HTTP Status: ' + res.statusCode)
-
-    let parsed = res.json
-    if (!parsed && res.raw) {
+    // Se o modo for testar paginação/filtros
+    if (testParam === 'probe-params') {
+      const targetQuery = queryParams.get('q') || '?pagina=1&limite=5'
+      const u = base + '/Cliente/getAll' + targetQuery
+      const t0 = Date.now()
+      let status = 0
+      let rawLen = 0
+      let errStr = null
+      let isArr = false
+      let count = 0
       try {
-        parsed = JSON.parse(res.raw)
+        const r = $http.send({
+          url: u,
+          method: 'GET',
+          headers: { AuthToken: token, Accept: 'application/json' },
+          timeout: 5, // curto: se responder rápido com lista pequena sabemos que filtrou/paginou!
+        })
+        status = r.statusCode
+        rawLen = r.raw ? r.raw.length : 0
+        if (Array.isArray(r.json)) {
+          isArr = true
+          count = r.json.length
+        }
+      } catch (pe) {
+        errStr = String(pe)
+      }
+
+      const resObj = {
+        query: targetQuery,
+        status: status,
+        rawLen: rawLen,
+        rawMB: (rawLen / (1024 * 1024)).toFixed(2),
+        isArray: isArr,
+        itemCount: count,
+        ms: Date.now() - t0,
+        error: errStr,
+      }
+
+      try {
+        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
+        rec.set('error', 'PROBE_QUERY: ' + JSON.stringify(resObj).slice(0, 500))
+        $app.save(rec)
       } catch (_) {}
+
+      return e.json(200, { success: true, result: resObj })
     }
 
-    const isArray = Array.isArray(parsed)
-    const count = isArray
-      ? parsed.length
-      : parsed && typeof parsed === 'object'
-        ? Object.keys(parsed).length
-        : 0
-    const firstItem = isArray && parsed.length > 0 ? parsed[0] : null
-    const firstItemKeys = firstItem ? Object.keys(firstItem) : []
+    // Modo padrão / download de getAll:
+    // Grava resultado também em um registro de diagnóstico no flex_sync para permitir inspeção sem timeout HTTP
+    const tStart = Date.now()
+    const targetUrl = base + '/Cliente/getAll'
+    console.log('[FlexSmart-TestGetAll] Iniciando GET ' + targetUrl + ' (timeout 300s)...')
+
+    let res = null
+    let getErr = null
+    try {
+      res = $http.send({
+        url: targetUrl,
+        method: 'GET',
+        headers: {
+          AuthToken: token,
+          Accept: 'application/json',
+        },
+        timeout: 300,
+      })
+    } catch (eSend) {
+      getErr = eSend
+    }
+
+    const tElapsedSec = ((Date.now() - tStart) / 1000).toFixed(2)
+
+    if (getErr || !res) {
+      const errMsg = getErr ? String(getErr) : 'sem resposta'
+      console.log('[FlexSmart-TestGetAll] Erro no $http.send após ' + tElapsedSec + 's: ' + errMsg)
+      try {
+        const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
+        rec.set('error', 'DIAGNOSTIC_DOWNLOAD_FAIL: ' + errMsg + ' (' + tElapsedSec + 's)')
+        $app.save(rec)
+      } catch (_) {}
+      return e.json(500, { success: false, error: errMsg, elapsedSec: tElapsedSec })
+    }
+
+    const rawLen = res.raw ? res.raw.length : 0
+    const rawMB = (rawLen / (1024 * 1024)).toFixed(2)
 
     console.log(
-      '[FlexSmart-TestGetAll] Resposta: isArray=' +
-        isArray +
-        ', count=' +
-        count +
-        ', keys 1º item=[' +
-        firstItemKeys.slice(0, 15).join(', ') +
-        ']',
+      '[FlexSmart-TestGetAll] Download concluído! HTTP=' +
+        res.statusCode +
+        ' tempo=' +
+        tElapsedSec +
+        's rawBytes=' +
+        rawLen +
+        ' (' +
+        rawMB +
+        ' MB)',
     )
+
+    let parseStatus = 'skipped'
+    let parseElapsedSec = '0'
+    let itemCount = null
+
+    if (testParam === 'parse') {
+      const tParseStart = Date.now()
+      console.log('[FlexSmart-TestGetAll] Iniciando parse...')
+      if (Array.isArray(res.json)) {
+        itemCount = res.json.length
+        parseStatus = 'res.json_native'
+      } else if (res.raw) {
+        const parsed = JSON.parse(res.raw)
+        itemCount = Array.isArray(parsed) ? parsed.length : 'object'
+        parseStatus = 'JSON.parse(res.raw)'
+      }
+      parseElapsedSec = ((Date.now() - tParseStart) / 1000).toFixed(2)
+      console.log(
+        '[FlexSmart-TestGetAll] Parse finalizado em ' +
+          parseElapsedSec +
+          's! Modo=' +
+          parseStatus +
+          ' Itens=' +
+          itemCount,
+      )
+    }
+
+    // Persiste o resultado do diagnóstico no último flex_sync para auditoria e histórico permanente
+    try {
+      const rec = $app.findFirstRecordByFilter('flex_sync', '1=1', '-created')
+      rec.set(
+        'error',
+        'DIAGNOSTIC_OK: bytes=' +
+          rawLen +
+          ' (' +
+          rawMB +
+          ' MB), dlTime=' +
+          tElapsedSec +
+          's, parse=' +
+          parseStatus +
+          ', parseTime=' +
+          parseElapsedSec +
+          's, items=' +
+          itemCount,
+      )
+      $app.save(rec)
+    } catch (_) {}
 
     return e.json(200, {
       success: true,
       statusCode: res.statusCode,
-      isArray: isArray,
-      count: count,
-      firstItemKeys: firstItemKeys,
-      firstItemSample: firstItem,
-      rawSnippet: String(res.raw || '').slice(0, 500),
+      rawBytes: rawLen,
+      rawMB: rawMB,
+      downloadElapsedSec: tElapsedSec,
+      parseStatus: parseStatus,
+      parseElapsedSec: parseElapsedSec,
+      itemCount: itemCount,
+      snippet: String(res.raw || '').slice(0, 300),
     })
   } catch (err) {
     const msg = err && err.message ? err.message : String(err)
-    console.log('[FlexSmart-TestGetAll] Erro: ' + msg)
+    console.log('[FlexSmart-TestGetAll] Erro no teste: ' + msg)
     return e.json(500, {
       success: false,
       error: msg,
@@ -1349,6 +1653,7 @@ routerAdd(
 
       for (let i = 0; i < totalErp; i++) {
         const item = erpList[i]
+        erpList[i] = null
         if (!item || typeof item !== 'object') {
           errorCount++
           continue
@@ -1407,6 +1712,7 @@ routerAdd(
           }
 
           let targetRecord = null
+
           if (erpCode && clientsByErpCode.has(erpCode)) {
             targetRecord = clientsByErpCode.get(erpCode)
           } else if (docClean && clientsByDoc.has(docClean)) {

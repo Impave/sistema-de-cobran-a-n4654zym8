@@ -295,7 +295,6 @@ export default function ClientsPage() {
     }
 
     const startTime = Date.now()
-    const isCancellingInitial = activeSync.status === 'cancelling'
 
     const interval = setInterval(async () => {
       try {
@@ -319,6 +318,32 @@ export default function ClientsPage() {
             description: 'A importação foi finalizada. O botão foi liberado para nova tentativa.',
           })
           loadData()
+          return
+        }
+
+        // Timeout de segurança no frontend para job em 'running' sem resposta por mais de 3 minutos (180s)
+        if (activeSync.status === 'running' && Date.now() - startTime > 180000) {
+          clearInterval(interval)
+          setSyncLoading(false)
+          setCancellingSync(false)
+          setActiveSync((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  status: 'error',
+                  currentStep:
+                    'Falha: o servidor encerrou o processo ou expirou o tempo limite ao baixar o arquivo de 74 MB.',
+                  error:
+                    'O download dos dados de clientes excedeu o limite de execução do servidor. Tente novamente em alguns instantes.',
+                }
+              : null,
+          )
+          toast({
+            title: 'Tempo limite excedido',
+            description:
+              'A resposta do ERP de 74 MB demorou além do limite de conexão do servidor. O botão foi liberado para nova tentativa.',
+            variant: 'destructive',
+          })
           return
         }
 
@@ -360,7 +385,6 @@ export default function ClientsPage() {
 
     return () => clearInterval(interval)
   }, [activeSync?.id, activeSync?.status, loadData, toast])
-
   // Interrupção / Cancelamento da importação
   const handleCancelSync = async () => {
     if (!activeSync) return

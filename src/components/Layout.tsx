@@ -6,6 +6,7 @@ import {
   Users,
   Receipt,
   Settings,
+  UserCog,
   LogOut,
   Menu,
   X,
@@ -21,6 +22,7 @@ const navItems = [
   { name: 'Clientes', path: '/clients', icon: Users },
   { name: 'Cobranças', path: '/charges', icon: Receipt },
   { name: 'Configurações', path: '/settings', icon: Settings },
+  { name: 'Usuários', path: '/users', icon: UserCog, adminOnly: true },
 ]
 
 export default function Layout() {
@@ -32,6 +34,8 @@ export default function Layout() {
     logout()
     navigate('/login')
   }
+
+  const visibleNavItems = navItems.filter((item) => !item.adminOnly || user?.role === 'admin')
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col md:flex-row text-slate-900 font-sans antialiased">
@@ -83,7 +87,7 @@ export default function Layout() {
             </div>
 
             <nav className="flex-1 p-3 space-y-1 overflow-y-auto">
-              {navItems.map((item) => {
+              {visibleNavItems.map((item) => {
                 const Icon = item.icon
                 return (
                   <NavLink
@@ -158,7 +162,7 @@ export default function Layout() {
 
         {/* Navigation list */}
         <nav className="flex-1 p-2 lg:p-3 space-y-1.5 overflow-y-auto">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon
             return (
               <NavLink

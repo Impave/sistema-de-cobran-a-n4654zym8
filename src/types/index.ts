@@ -1,13 +1,34 @@
 export type ChargeStatus = 'pending' | 'paid' | 'overdue' | 'cancelled'
 
+export type UserRole = 'admin' | 'operador'
+
 export interface UserProfile {
   id: string
   email: string
   name?: string
   avatar?: string
+  role?: UserRole
+  active?: boolean
   verified?: boolean
   created?: string
   updated?: string
+}
+
+export interface UserFormData {
+  name: string
+  email: string
+  password?: string
+  passwordConfirm?: string
+  role: UserRole
+  active?: boolean
+}
+
+export interface UsersPaginatedResponse {
+  items: UserProfile[]
+  page: number
+  perPage: number
+  totalItems: number
+  totalPages: number
 }
 
 export interface ClientRecord {

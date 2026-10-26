@@ -10,6 +10,7 @@ import Index from '@/pages/Index'
 import ClientsPage from '@/pages/Clients'
 import ChargesPage from '@/pages/Charges'
 import SettingsPage from '@/pages/Settings'
+import UsersPage from '@/pages/Users'
 import Login from '@/pages/Login'
 import Register from '@/pages/Register'
 import ForgotPassword from '@/pages/ForgotPassword'
@@ -65,6 +66,14 @@ const App = () => (
             <Route path="/clients" element={<ClientsPage />} />
             <Route path="/charges" element={<ChargesPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route
+              path="/users"
+              element={
+                <ProtectedRoute requireAdmin>
+                  <UsersPage />
+                </ProtectedRoute>
+              }
+            />
           </Route>
 
           {/* Rota 404 */}

@@ -445,6 +445,15 @@ export default function ClientsPage() {
         description: msg,
         variant: 'destructive',
       })
+      // Atualiza o estado da última sincronização para refletir no card se o job foi criado ou se falhou
+      try {
+        const last = await clientsService.getLastFlexSmartSync()
+        if (last?.lastSync) {
+          setActiveSync(last.lastSync)
+        }
+      } catch {
+        /* intentionally ignored */
+      }
     }
   }
 

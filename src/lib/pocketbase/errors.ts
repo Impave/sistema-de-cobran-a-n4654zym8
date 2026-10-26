@@ -24,6 +24,17 @@ export function getErrorMessage(error: unknown): string {
   if (!(error instanceof ClientResponseError)) {
     return error instanceof Error ? error.message : 'An unexpected error occurred.'
   }
+  const responseData = error.response as Record<string, unknown> | undefined
+  const detailedError =
+    typeof responseData?.error === 'string'
+      ? responseData.error
+      : typeof responseData?.message === 'string' &&
+          responseData.message !== 'Failed to authenticate.'
+        ? responseData.message
+        : ''
+
   const msgs = Object.values(extractFieldErrors(error))
-  return msgs.length > 0 ? msgs.join(' ') : error.message || 'An unexpected error occurred.'
+  if (msgs.length > 0) return msgs.join(' ')
+  if (detailedError) return detailedError
+  return error.message || 'An unexpected error occurred.'
 }

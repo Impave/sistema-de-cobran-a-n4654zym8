@@ -56,7 +56,7 @@ routerAdd(
           const ageMs = nowTime - new Date(updatedStr).getTime()
           const st = stale.getString('status')
 
-          // Se o job ficou em cancelling ou pending por mais de 2 minutos, ou running por mais de 5 minutos, ou foi interrompido por reinício
+          // Se o job ficou em cancelling ou pending, ou running por mais de 3 minutos, finaliza para liberar
           if (st === 'cancelling') {
             stale.set('status', 'cancelled')
             stale.set(
@@ -66,7 +66,7 @@ routerAdd(
             stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(stale)
             console.log('[FlexSmart] Job antigo em cancelling marcado como cancelled: ' + stale.id)
-          } else if (ageMs > 300000 || st === 'pending') {
+          } else if (ageMs > 180000 || st === 'pending') {
             stale.set('status', 'cancelled')
             stale.set(
               'current_step',

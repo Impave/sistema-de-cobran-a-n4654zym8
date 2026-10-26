@@ -121,16 +121,22 @@ routerAdd(
       // Lê parâmetros do corpo se houver ({ date?: string, mode?: 'day_by_day' | 'single_date' })
       let reqBody = {}
       try {
-        const rawBody = e.request.body ? e.request.body.readAll() : null
-        if (rawBody && rawBody.length > 0) {
-          reqBody = JSON.parse(String(rawBody))
+        const reqInfo = e.requestInfo()
+        if (reqInfo && reqInfo.body && typeof reqInfo.body === 'object') {
+          reqBody = reqInfo.body
         }
       } catch (_) {}
 
-      const isDayByDay = reqBody.mode === 'day_by_day'
-      const defaultStartDate = '01/09/2026'
-      const todayStr = getTodayBRHelper()
-      const yesterdayStr = getYesterdayBRHelper()
+      if (!reqBody || Object.keys(reqBody).length === 0) {
+        try {
+          if (typeof toString === 'function' && e.request && e.request.body) {
+            const rawStr = toString(e.request.body)
+            if (rawStr && rawStr.trim()) {
+              reqBody = JSON.parse(rawStr)
+            }
+          }
+        } catch (_) {}
+      }
 
       // Converte YYYY-MM-DD para DD/MM/AAAA se vier no formato ISO do datepicker
       function normalizeToBRDate(str) {
@@ -145,6 +151,14 @@ routerAdd(
         }
         return trimmed
       }
+
+      const isDayByDay =
+        reqBody.mode === 'day_by_day' ||
+        reqBody.fullSync === true ||
+        (reqBody.startDate && normalizeToBRDate(reqBody.startDate) !== '')
+      const defaultStartDate = '01/09/2026'
+      const todayStr = getTodayBRHelper()
+      const yesterdayStr = getYesterdayBRHelper()
 
       let targetDate = ''
       let syncStartDate = ''
@@ -184,7 +198,7 @@ routerAdd(
           const ageMs = nowTime - new Date(updatedStr).getTime()
           const st = stale.getString('status')
 
-          if (st === 'cancelling' || ageMs > 60000 || st === 'pending' || st === 'running') {
+          if (st === 'cancelling' || ageMs > 15000 || st === 'pending' || st === 'running') {
             stale.set('status', 'cancelled')
             stale.set('current_step', 'Sessão anterior finalizada ao iniciar novo processo.')
             stale.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
@@ -194,9 +208,7 @@ routerAdd(
         }
       } catch (staleErr) {
         console.log('[FlexSmart] Aviso ao limpar jobs antigos: ' + String(staleErr))
-      }
-
-      // Cria o registro na coleção flex_sync
+      } // Cria o registro na coleção flex_sync
       const syncCol = $app.findCollectionByNameOrId('flex_sync')
       const syncRec = new Record(syncCol)
       syncRec.set('owner', ownerId)
@@ -236,605 +248,755 @@ routerAdd(
           totalDays,
       )
 
-      // Executa o processamento assíncrono em segundo plano
-      setTimeout(() => {
-        function getFlexSmartToken(forceRefresh) {
-          const username =
-            $os.getenv('FLEXSMART_USERNAME') ||
-            ($secrets && $secrets.has('FLEXSMART_USERNAME')
-              ? $secrets.get('FLEXSMART_USERNAME')
-              : '')
-          const password =
-            $os.getenv('FLEXSMART_PASSWORD') ||
-            ($secrets && $secrets.has('FLEXSMART_PASSWORD')
-              ? $secrets.get('FLEXSMART_PASSWORD')
-              : '')
+      // Se for modo single_date, executa em segundo plano com setTimeout
+      // Se for modo day_by_day, o frontend avança sequencialmente via step-sync
+      if (!isDayByDay) {
+        setTimeout(() => {
+          function getFlexSmartToken(forceRefresh) {
+            const username =
+              $os.getenv('FLEXSMART_USERNAME') ||
+              ($secrets && $secrets.has('FLEXSMART_USERNAME')
+                ? $secrets.get('FLEXSMART_USERNAME')
+                : '')
+            const password =
+              $os.getenv('FLEXSMART_PASSWORD') ||
+              ($secrets && $secrets.has('FLEXSMART_PASSWORD')
+                ? $secrets.get('FLEXSMART_PASSWORD')
+                : '')
 
-          if (!username || !password) {
-            throw new Error(
-              'Credenciais FlexSmart não configuradas (FLEXSMART_USERNAME / FLEXSMART_PASSWORD)',
-            )
-          }
+            if (!username || !password) {
+              throw new Error(
+                'Credenciais FlexSmart não configuradas (FLEXSMART_USERNAME / FLEXSMART_PASSWORD)',
+              )
+            }
 
-          const now = Date.now()
-          if (!forceRefresh) {
-            try {
-              if (
-                $app.store &&
-                $app.store().has('flexsmart_cached_token') &&
-                $app.store().has('flexsmart_token_time')
-              ) {
-                const cached = $app.store().get('flexsmart_cached_token')
-                const time = Number($app.store().get('flexsmart_token_time')) || 0
-                if (cached && now - time < 3600000) {
-                  return String(cached)
+            const now = Date.now()
+            if (!forceRefresh) {
+              try {
+                if (
+                  $app.store &&
+                  $app.store().has('flexsmart_cached_token') &&
+                  $app.store().has('flexsmart_token_time')
+                ) {
+                  const cached = $app.store().get('flexsmart_cached_token')
+                  const time = Number($app.store().get('flexsmart_token_time')) || 0
+                  if (cached && now - time < 3600000) {
+                    return String(cached)
+                  }
                 }
-              }
-            } catch (_) {}
-          }
+              } catch (_) {}
+            }
 
-          const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
-          console.log('[FlexSmart] Realizando login em ' + loginUrl)
+            const loginUrl = 'https://api.impave.com.br:8443/login?Content-Type=application/json'
+            console.log('[FlexSmart] Realizando login em ' + loginUrl)
 
-          const jsonBodyStr = JSON.stringify({
-            username: username,
-            password: password,
-          })
-
-          let res = null
-          let sendErr = null
-          try {
-            res = $http.send({
-              url: loginUrl,
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-              },
-              body: jsonBodyStr,
-              timeout: 30,
+            const jsonBodyStr = JSON.stringify({
+              username: username,
+              password: password,
             })
-          } catch (errSend) {
-            sendErr = errSend
-            console.log('[FlexSmart] Erro na requisição HTTP de login: ' + String(errSend))
-          }
 
-          if (!res) {
-            throw new Error(
-              'Falha de conexão ao tentar login no FlexSmart: ' +
-                (sendErr ? String(sendErr) : 'sem resposta'),
-            )
-          }
-
-          let parsedJson = res.json
-          if (!parsedJson && res.raw) {
+            let res = null
+            let sendErr = null
             try {
-              parsedJson = JSON.parse(res.raw)
-            } catch (_) {}
-          }
-
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            let detail = ''
-            if (parsedJson && typeof parsedJson === 'object') {
-              detail = ': ' + (parsedJson.message || parsedJson.error || JSON.stringify(parsedJson))
-            } else if (res.raw) {
-              detail = ': ' + String(res.raw).slice(0, 200)
+              res = $http.send({
+                url: loginUrl,
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: jsonBodyStr,
+                timeout: 30,
+              })
+            } catch (errSend) {
+              sendErr = errSend
+              console.log('[FlexSmart] Erro na requisição HTTP de login: ' + String(errSend))
             }
-            throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
-          }
 
-          const token =
-            parsedJson && typeof parsedJson.access_token === 'string'
-              ? parsedJson.access_token.trim()
-              : null
-
-          if (!token) {
-            throw new Error('Token "access_token" não encontrado na resposta de login do FlexSmart')
-          }
-
-          try {
-            if ($app.store) {
-              $app.store().set('flexsmart_cached_token', token)
-              $app.store().set('flexsmart_token_time', String(now))
+            if (!res) {
+              throw new Error(
+                'Falha de conexão ao tentar login no FlexSmart: ' +
+                  (sendErr ? String(sendErr) : 'sem resposta'),
+              )
             }
-          } catch (_) {}
 
-          return token
-        }
+            let parsedJson = res.json
+            if (!parsedJson && res.raw) {
+              try {
+                parsedJson = JSON.parse(res.raw)
+              } catch (_) {}
+            }
 
-        function fetchERPByDate(searchDate, forceRelogin, onStepUpdate) {
-          const rawBase =
-            $os.getenv('FLEXSMART_BASE_URL') ||
-            ($secrets && $secrets.has('FLEXSMART_BASE_URL')
-              ? $secrets.get('FLEXSMART_BASE_URL')
-              : '') ||
-            'https://api.impave.com.br:8443'
-          const base = rawBase.replace(/\/+$/, '')
-          const token = getFlexSmartToken(forceRelogin)
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              let detail = ''
+              if (parsedJson && typeof parsedJson === 'object') {
+                detail =
+                  ': ' + (parsedJson.message || parsedJson.error || JSON.stringify(parsedJson))
+              } else if (res.raw) {
+                detail = ': ' + String(res.raw).slice(0, 200)
+              }
+              throw new Error('Login no ERP FlexSmart falhou com HTTP ' + res.statusCode + detail)
+            }
 
-          if (onStepUpdate) {
-            onStepUpdate('Buscando clientes alterados na data ' + searchDate + ' no ERP...')
-          }
+            const token =
+              parsedJson && typeof parsedJson.access_token === 'string'
+                ? parsedJson.access_token.trim()
+                : null
 
-          let res = null
-          let lastErr = null
-          const startTime = Date.now()
-          try {
-            res = $http.send({
-              url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(searchDate),
-              method: 'GET',
-              headers: {
-                AuthToken: token,
-                Accept: 'application/json',
-              },
-              timeout: 60,
-            })
-          } catch (eGet) {
-            lastErr = eGet
-          }
+            if (!token) {
+              throw new Error(
+                'Token "access_token" não encontrado na resposta de login do FlexSmart',
+              )
+            }
 
-          const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1)
-
-          if (!res) {
-            throw new Error(
-              'Falha ao conectar no endpoint /Cliente/getByDtAtz para data ' +
-                searchDate +
-                ' após ' +
-                elapsedSec +
-                's: ' +
-                (lastErr ? String(lastErr) : 'sem resposta do servidor'),
-            )
-          }
-
-          if ((res.statusCode === 401 || res.statusCode === 403) && !forceRelogin) {
-            console.log('[FlexSmart] Token expirado (' + res.statusCode + '), renovando token...')
             try {
               if ($app.store) {
-                $app.store().remove('flexsmart_cached_token')
-                $app.store().remove('flexsmart_token_time')
+                $app.store().set('flexsmart_cached_token', token)
+                $app.store().set('flexsmart_token_time', String(now))
               }
             } catch (_) {}
-            return fetchERPByDate(searchDate, true, onStepUpdate)
+
+            return token
           }
 
-          if (res.statusCode < 200 || res.statusCode >= 300) {
-            let detail = ''
-            if (res.raw) {
-              detail = ' - ' + String(res.raw).slice(0, 300)
-            }
-            throw new Error(
-              'Falha ao buscar clientes na data ' +
-                searchDate +
-                ': HTTP ' +
-                res.statusCode +
-                detail,
-            )
-          }
+          function fetchERPByDate(searchDate, forceRelogin, onStepUpdate) {
+            const rawBase =
+              $os.getenv('FLEXSMART_BASE_URL') ||
+              ($secrets && $secrets.has('FLEXSMART_BASE_URL')
+                ? $secrets.get('FLEXSMART_BASE_URL')
+                : '') ||
+              'https://api.impave.com.br:8443'
+            const base = rawBase.replace(/\/+$/, '')
+            const token = getFlexSmartToken(forceRelogin)
 
-          if (Array.isArray(res.json)) {
-            return res.json
-          }
+            if (onStepUpdate) {
+              onStepUpdate('Buscando clientes alterados na data ' + searchDate + ' no ERP...')
+            }
 
-          if (res.json && typeof res.json === 'object') {
-            const candidateKeys = [
-              'dados',
-              'data',
-              'clientes',
-              'clients',
-              'content',
-              'items',
-              'resultado',
-              'results',
-              'result',
-              'lista',
-              'list',
-              'records',
-              'rows',
-            ]
-            for (const key of candidateKeys) {
-              if (Array.isArray(res.json[key])) {
-                return res.json[key]
-              }
-            }
-            for (const k of Object.keys(res.json)) {
-              if (Array.isArray(res.json[k])) {
-                return res.json[k]
-              }
-            }
-            if (
-              res.json.cdCliente ||
-              res.json.nmCliente ||
-              res.json.cnpjCpf ||
-              res.json.id ||
-              res.json.codigo ||
-              res.json.nome
-            ) {
-              return [res.json]
-            }
-          }
-
-          if (res.raw && typeof res.raw === 'string') {
+            let res = null
+            let lastErr = null
+            const startTime = Date.now()
             try {
-              const parsed = JSON.parse(res.raw)
-              if (Array.isArray(parsed)) {
-                return parsed
-              }
-              if (parsed && typeof parsed === 'object') {
-                for (const key of [
-                  'dados',
-                  'data',
-                  'clientes',
-                  'clients',
-                  'content',
-                  'items',
-                  'lista',
-                  'records',
-                ]) {
-                  if (Array.isArray(parsed[key])) return parsed[key]
-                }
-                for (const k of Object.keys(parsed)) {
-                  if (Array.isArray(parsed[k])) return parsed[k]
-                }
-                if (parsed.cdCliente || parsed.nmCliente || parsed.cnpjCpf) {
-                  return [parsed]
-                }
-              }
-            } catch (pErr) {
-              console.log(
-                '[FlexSmart] JSON.parse(res.raw) falhou na data ' +
-                  searchDate +
-                  ': ' +
-                  String(pErr),
-              )
+              res = $http.send({
+                url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(searchDate),
+                method: 'GET',
+                headers: {
+                  AuthToken: token,
+                  Accept: 'application/json',
+                },
+                timeout: 60,
+              })
+            } catch (eGet) {
+              lastErr = eGet
+            }
+
+            const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1)
+
+            if (!res) {
               throw new Error(
-                'Falha ao interpretar dados JSON do ERP na data ' +
+                'Falha ao conectar no endpoint /Cliente/getByDtAtz para data ' +
                   searchDate +
-                  ': ' +
-                  String(pErr),
+                  ' após ' +
+                  elapsedSec +
+                  's: ' +
+                  (lastErr ? String(lastErr) : 'sem resposta do servidor'),
               )
             }
-          }
 
-          return []
-        }
-
-        function upsertClientRecord(
-          item,
-          owner,
-          clientsCol,
-          clientsByErpCode,
-          clientsByDoc,
-          indexFallback,
-        ) {
-          const erpCode = pickFirstHelper(item, [
-            'cdCliente',
-            'cd_cliente',
-            'codCliente',
-            'codigoCliente',
-            'codigo',
-            'id',
-          ])
-
-          const docRaw = pickFirstHelper(item, [
-            'cnpjCpf',
-            'cnpj_cpf',
-            'cpfCnpj',
-            'cpf_cnpj',
-            'cnpj',
-            'cpf',
-            'documento',
-            'doc',
-            'nrDocumento',
-          ])
-          const docClean = cleanDigitsHelper(docRaw)
-
-          const nameRaw = pickFirstHelper(item, [
-            'nmCliente',
-            'nmFantasia',
-            'nomeCliente',
-            'razaoSocial',
-            'razao_social',
-            'nome_fantasia',
-            'nomeFantasia',
-            'nome',
-            'dsNome',
-            'descricao',
-          ])
-
-          const emailRaw = pickFirstHelper(item, [
-            'email',
-            'emailNfe',
-            'emailCompras',
-            'e_mail',
-            'dsEmail',
-            'mail',
-          ])
-
-          const phoneRaw = pickFirstHelper(item, [
-            'celular',
-            'fone',
-            'telefone',
-            'nrTelefone',
-            'phone',
-            'tel',
-            'dsTelefone',
-          ])
-
-          const logradouro = pickFirstHelper(item, [
-            'enderecoLogradouro',
-            'logradouro',
-            'endereco',
-            'rua',
-            'dsEndereco',
-          ])
-          const numero = pickFirstHelper(item, ['enderecoNumero', 'numero', 'nrEndereco'])
-          const complemento = pickFirstHelper(item, [
-            'enderecoComplemento',
-            'complemento',
-            'dsComplemento',
-          ])
-
-          let bairro = ''
-          if (item.bairro && typeof item.bairro === 'object') {
-            bairro = pickFirstHelper(item.bairro, ['nmBairro', 'dsBairro', 'nome'])
-          }
-          if (!bairro) {
-            bairro = pickFirstHelper(item, ['bairro', 'dsBairro', 'nmBairro'])
-          }
-
-          let fullAddressParts = []
-          if (logradouro) {
-            let addr = logradouro
-            if (numero) addr += ', ' + numero
-            if (complemento) addr += ' (' + complemento + ')'
-            if (bairro) addr += ' - ' + bairro
-            fullAddressParts.push(addr)
-          } else if (pickFirstHelper(item, ['address', 'ds_endereco'])) {
-            fullAddressParts.push(pickFirstHelper(item, ['address', 'ds_endereco']))
-          }
-          const address = fullAddressParts.join(', ')
-
-          let cityRaw = ''
-          let stateRaw = ''
-          if (item.cidade && typeof item.cidade === 'object') {
-            cityRaw = pickFirstHelper(item.cidade, ['nmCidade', 'nome', 'dsCidade'])
-            stateRaw = pickFirstHelper(item.cidade, ['uf', 'sgUf', 'siglaUf', 'estado'])
-          }
-          if (!cityRaw) {
-            cityRaw = pickFirstHelper(item, [
-              'nmCidade',
-              'cidade',
-              'municipio',
-              'dsCidade',
-              'ds_cidade',
-              'nm_municipio',
-            ])
-          }
-          if (!stateRaw) {
-            stateRaw = pickFirstHelper(item, [
-              'uf',
-              'sgUf',
-              'siglaUf',
-              'estado',
-              'state',
-              'dsUf',
-              'ds_uf',
-            ])
-          }
-
-          let name = nameRaw
-          if (!name || name.trim().length < 2) {
-            name = 'Cliente ' + (erpCode || docClean || indexFallback)
-          }
-
-          let targetRecord = null
-          if (erpCode && clientsByErpCode.has(erpCode)) {
-            targetRecord = clientsByErpCode.get(erpCode)
-          } else if (docClean && clientsByDoc.has(docClean)) {
-            targetRecord = clientsByDoc.get(docClean)
-          }
-
-          const isUpdate = !!targetRecord
-          const rec = targetRecord || new Record(clientsCol)
-
-          if (!isUpdate) {
-            rec.set('owner', owner)
-          }
-
-          rec.set('name', name)
-
-          if (erpCode) {
-            rec.set('erp_code', erpCode)
-          }
-
-          if (docClean) {
-            rec.set('document', docClean)
-          }
-
-          if (emailRaw && typeof emailRaw === 'string' && emailRaw.indexOf('@') > 0) {
-            // PocketBase valida email com checagem rigorosa de formato
-            // Limpa espaços e valida formato completo: texto@dominio.tld
-            const emailTrimmed = emailRaw.trim().toLowerCase()
-            const emailValid =
-              /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(
-                emailTrimmed,
-              )
-            if (emailValid && emailTrimmed.length <= 254) {
-              rec.set('email', emailTrimmed)
+            if ((res.statusCode === 401 || res.statusCode === 403) && !forceRelogin) {
+              console.log('[FlexSmart] Token expirado (' + res.statusCode + '), renovando token...')
+              try {
+                if ($app.store) {
+                  $app.store().remove('flexsmart_cached_token')
+                  $app.store().remove('flexsmart_token_time')
+                }
+              } catch (_) {}
+              return fetchERPByDate(searchDate, true, onStepUpdate)
             }
+
+            if (res.statusCode < 200 || res.statusCode >= 300) {
+              let detail = ''
+              if (res.raw) {
+                detail = ' - ' + String(res.raw).slice(0, 300)
+              }
+              throw new Error(
+                'Falha ao buscar clientes na data ' +
+                  searchDate +
+                  ': HTTP ' +
+                  res.statusCode +
+                  detail,
+              )
+            }
+
+            if (Array.isArray(res.json)) {
+              return res.json
+            }
+
+            if (res.json && typeof res.json === 'object') {
+              const candidateKeys = [
+                'dados',
+                'data',
+                'clientes',
+                'clients',
+                'content',
+                'items',
+                'resultado',
+                'results',
+                'result',
+                'lista',
+                'list',
+                'records',
+                'rows',
+              ]
+              for (const key of candidateKeys) {
+                if (Array.isArray(res.json[key])) {
+                  return res.json[key]
+                }
+              }
+              for (const k of Object.keys(res.json)) {
+                if (Array.isArray(res.json[k])) {
+                  return res.json[k]
+                }
+              }
+              if (
+                res.json.cdCliente ||
+                res.json.nmCliente ||
+                res.json.cnpjCpf ||
+                res.json.id ||
+                res.json.codigo ||
+                res.json.nome
+              ) {
+                return [res.json]
+              }
+            }
+
+            if (res.raw && typeof res.raw === 'string') {
+              try {
+                const parsed = JSON.parse(res.raw)
+                if (Array.isArray(parsed)) {
+                  return parsed
+                }
+                if (parsed && typeof parsed === 'object') {
+                  for (const key of [
+                    'dados',
+                    'data',
+                    'clientes',
+                    'clients',
+                    'content',
+                    'items',
+                    'lista',
+                    'records',
+                  ]) {
+                    if (Array.isArray(parsed[key])) return parsed[key]
+                  }
+                  for (const k of Object.keys(parsed)) {
+                    if (Array.isArray(parsed[k])) return parsed[k]
+                  }
+                  if (parsed.cdCliente || parsed.nmCliente || parsed.cnpjCpf) {
+                    return [parsed]
+                  }
+                }
+              } catch (pErr) {
+                console.log(
+                  '[FlexSmart] JSON.parse(res.raw) falhou na data ' +
+                    searchDate +
+                    ': ' +
+                    String(pErr),
+                )
+                throw new Error(
+                  'Falha ao interpretar dados JSON do ERP na data ' +
+                    searchDate +
+                    ': ' +
+                    String(pErr),
+                )
+              }
+            }
+
+            return []
           }
 
-          if (phoneRaw) {
-            rec.set('phone', cleanDigitsHelper(phoneRaw))
+          function upsertClientRecord(
+            item,
+            owner,
+            clientsCol,
+            clientsByErpCode,
+            clientsByDoc,
+            indexFallback,
+          ) {
+            const erpCode = pickFirstHelper(item, [
+              'cdCliente',
+              'cd_cliente',
+              'codCliente',
+              'codigoCliente',
+              'codigo',
+              'id',
+            ])
+
+            const docRaw = pickFirstHelper(item, [
+              'cnpjCpf',
+              'cnpj_cpf',
+              'cpfCnpj',
+              'cpf_cnpj',
+              'cnpj',
+              'cpf',
+              'documento',
+              'doc',
+              'nrDocumento',
+            ])
+            const docClean = cleanDigitsHelper(docRaw)
+
+            const nameRaw = pickFirstHelper(item, [
+              'nmCliente',
+              'nmFantasia',
+              'nomeCliente',
+              'razaoSocial',
+              'razao_social',
+              'nome_fantasia',
+              'nomeFantasia',
+              'nome',
+              'dsNome',
+              'descricao',
+            ])
+
+            const emailRaw = pickFirstHelper(item, [
+              'email',
+              'emailNfe',
+              'emailCompras',
+              'e_mail',
+              'dsEmail',
+              'mail',
+            ])
+
+            const phoneRaw = pickFirstHelper(item, [
+              'celular',
+              'fone',
+              'telefone',
+              'nrTelefone',
+              'phone',
+              'tel',
+              'dsTelefone',
+            ])
+
+            const logradouro = pickFirstHelper(item, [
+              'enderecoLogradouro',
+              'logradouro',
+              'endereco',
+              'rua',
+              'dsEndereco',
+            ])
+            const numero = pickFirstHelper(item, ['enderecoNumero', 'numero', 'nrEndereco'])
+            const complemento = pickFirstHelper(item, [
+              'enderecoComplemento',
+              'complemento',
+              'dsComplemento',
+            ])
+
+            let bairro = ''
+            if (item.bairro && typeof item.bairro === 'object') {
+              bairro = pickFirstHelper(item.bairro, ['nmBairro', 'dsBairro', 'nome'])
+            }
+            if (!bairro) {
+              bairro = pickFirstHelper(item, ['bairro', 'dsBairro', 'nmBairro'])
+            }
+
+            let fullAddressParts = []
+            if (logradouro) {
+              let addr = logradouro
+              if (numero) addr += ', ' + numero
+              if (complemento) addr += ' (' + complemento + ')'
+              if (bairro) addr += ' - ' + bairro
+              fullAddressParts.push(addr)
+            } else if (pickFirstHelper(item, ['address', 'ds_endereco'])) {
+              fullAddressParts.push(pickFirstHelper(item, ['address', 'ds_endereco']))
+            }
+            const address = fullAddressParts.join(', ')
+
+            let cityRaw = ''
+            let stateRaw = ''
+            if (item.cidade && typeof item.cidade === 'object') {
+              cityRaw = pickFirstHelper(item.cidade, ['nmCidade', 'nome', 'dsCidade'])
+              stateRaw = pickFirstHelper(item.cidade, ['uf', 'sgUf', 'siglaUf', 'estado'])
+            }
+            if (!cityRaw) {
+              cityRaw = pickFirstHelper(item, [
+                'nmCidade',
+                'cidade',
+                'municipio',
+                'dsCidade',
+                'ds_cidade',
+                'nm_municipio',
+              ])
+            }
+            if (!stateRaw) {
+              stateRaw = pickFirstHelper(item, [
+                'uf',
+                'sgUf',
+                'siglaUf',
+                'estado',
+                'state',
+                'dsUf',
+                'ds_uf',
+              ])
+            }
+
+            let name = nameRaw
+            if (!name || name.trim().length < 2) {
+              name = 'Cliente ' + (erpCode || docClean || indexFallback)
+            }
+
+            let targetRecord = null
+            if (erpCode && clientsByErpCode.has(erpCode)) {
+              targetRecord = clientsByErpCode.get(erpCode)
+            } else if (docClean && clientsByDoc.has(docClean)) {
+              targetRecord = clientsByDoc.get(docClean)
+            }
+
+            const isUpdate = !!targetRecord
+            const rec = targetRecord || new Record(clientsCol)
+
+            if (!isUpdate) {
+              rec.set('owner', owner)
+            }
+
+            rec.set('name', name)
+
+            if (erpCode) {
+              rec.set('erp_code', erpCode)
+            }
+
+            if (docClean) {
+              rec.set('document', docClean)
+            }
+
+            if (emailRaw && typeof emailRaw === 'string' && emailRaw.indexOf('@') > 0) {
+              // PocketBase valida email com checagem rigorosa de formato
+              // Limpa espaços e valida formato completo: texto@dominio.tld
+              const emailTrimmed = emailRaw.trim().toLowerCase()
+              const emailValid =
+                /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(
+                  emailTrimmed,
+                )
+              if (emailValid && emailTrimmed.length <= 254) {
+                rec.set('email', emailTrimmed)
+              }
+            }
+
+            if (phoneRaw) {
+              rec.set('phone', cleanDigitsHelper(phoneRaw))
+            }
+
+            if (address) {
+              rec.set('address', address)
+            }
+
+            if (cityRaw) {
+              rec.set('city', cityRaw)
+            }
+
+            if (stateRaw) {
+              rec.set('state', stateRaw.toUpperCase().slice(0, 2))
+            }
+
+            $app.save(rec)
+
+            if (erpCode) clientsByErpCode.set(erpCode, rec)
+            if (docClean) clientsByDoc.set(docClean, rec)
+
+            return isUpdate ? 'updated' : 'created'
           }
 
-          if (address) {
-            rec.set('address', address)
-          }
-
-          if (cityRaw) {
-            rec.set('city', cityRaw)
-          }
-
-          if (stateRaw) {
-            rec.set('state', stateRaw.toUpperCase().slice(0, 2))
-          }
-
-          $app.save(rec)
-
-          if (erpCode) clientsByErpCode.set(erpCode, rec)
-          if (docClean) clientsByDoc.set(docClean, rec)
-
-          return isUpdate ? 'updated' : 'created'
-        }
-
-        let jobRec = null
-        try {
-          jobRec = $app.findRecordById('flex_sync', syncId)
-        } catch (_) {
-          return
-        }
-
-        try {
-          const initialStatus = jobRec.getString('status')
-          if (initialStatus === 'cancelling' || initialStatus === 'cancelled') {
-            jobRec.set('status', 'cancelled')
-            jobRec.set('current_step', 'Importação cancelada antes de iniciar.')
-            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(jobRec)
-            console.log('[FlexSmart ' + syncId + '] Cancelado antes do início.')
+          let jobRec = null
+          try {
+            jobRec = $app.findRecordById('flex_sync', syncId)
+          } catch (_) {
             return
           }
 
-          jobRec.set('status', 'running')
-          jobRec.set('started_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-          $app.save(jobRec)
+          try {
+            const initialStatus = jobRec.getString('status')
+            if (initialStatus === 'cancelling' || initialStatus === 'cancelled') {
+              jobRec.set('status', 'cancelled')
+              jobRec.set('current_step', 'Importação cancelada antes de iniciar.')
+              jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+              $app.save(jobRec)
+              console.log('[FlexSmart ' + syncId + '] Cancelado antes do início.')
+              return
+            }
 
-          // Carrega mapa de clientes existentes para upsert eficiente em memória
-          const existingRecords = $app.findRecordsByFilter(
-            'clients',
-            'owner = {:owner}',
-            '-created',
-            100000,
-            0,
-            { owner: ownerId },
-          )
-
-          const clientsByErpCode = new Map()
-          const clientsByDoc = new Map()
-
-          for (const rec of existingRecords) {
-            const erpCode = rec.getString('erp_code')
-            const doc = cleanDigitsHelper(rec.getString('document'))
-            if (erpCode) clientsByErpCode.set(erpCode, rec)
-            if (doc) clientsByDoc.set(doc, rec)
-          }
-
-          const clientsCol = $app.findCollectionByNameOrId('clients')
-          let createdCount = 0
-          let updatedCount = 0
-          let totalImportedCount = 0
-          let wasCancelled = false
-
-          if (isDayByDay) {
-            // ==========================================
-            // MODO CARGA COMPLETA DIA A DIA (DATA ESCOLHIDA -> HOJE)
-            // ==========================================
-            const datesToProcess = generateDateRangeBRHelper(syncStartDate, new Date())
-            const countDays = datesToProcess.length
-
-            console.log(
-              '[FlexSmart ' +
-                syncId +
-                '] Iniciando carga dia a dia: de ' +
-                syncStartDate +
-                ' até ' +
-                todayStr +
-                ' (' +
-                countDays +
-                ' dias)',
-            )
-
-            jobRec.set('total_days', countDays)
-            jobRec.set('processed_days', 0)
+            jobRec.set('status', 'running')
+            jobRec.set('started_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(jobRec)
 
-            for (let dayIndex = 0; dayIndex < countDays; dayIndex++) {
-              const currentDayStr = datesToProcess[dayIndex]
-              const dayNumber = dayIndex + 1
+            // Carrega mapa de clientes existentes para upsert eficiente em memória
+            const existingRecords = $app.findRecordsByFilter(
+              'clients',
+              'owner = {:owner}',
+              '-created',
+              100000,
+              0,
+              { owner: ownerId },
+            )
 
-              // 1. Verifica solicitação de cancelamento antes de cada requisição diária
-              try {
-                const checkRec = $app.findRecordById('flex_sync', syncId)
-                const currentStatus = checkRec.getString('status')
-                if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
-                  console.log(
-                    '[FlexSmart ' +
-                      syncId +
-                      '] Interrupção solicitada no início do dia ' +
-                      currentDayStr,
+            const clientsByErpCode = new Map()
+            const clientsByDoc = new Map()
+
+            for (const rec of existingRecords) {
+              const erpCode = rec.getString('erp_code')
+              const doc = cleanDigitsHelper(rec.getString('document'))
+              if (erpCode) clientsByErpCode.set(erpCode, rec)
+              if (doc) clientsByDoc.set(doc, rec)
+            }
+
+            const clientsCol = $app.findCollectionByNameOrId('clients')
+            let createdCount = 0
+            let updatedCount = 0
+            let totalImportedCount = 0
+            let wasCancelled = false
+
+            if (isDayByDay) {
+              // ==========================================
+              // MODO CARGA COMPLETA DIA A DIA (DATA ESCOLHIDA -> HOJE)
+              // ==========================================
+              const datesToProcess = generateDateRangeBRHelper(syncStartDate, new Date())
+              const countDays = datesToProcess.length
+
+              console.log(
+                '[FlexSmart ' +
+                  syncId +
+                  '] Iniciando carga dia a dia: de ' +
+                  syncStartDate +
+                  ' até ' +
+                  todayStr +
+                  ' (' +
+                  countDays +
+                  ' dias)',
+              )
+
+              jobRec.set('total_days', countDays)
+              jobRec.set('processed_days', 0)
+              $app.save(jobRec)
+
+              for (let dayIndex = 0; dayIndex < countDays; dayIndex++) {
+                const currentDayStr = datesToProcess[dayIndex]
+                const dayNumber = dayIndex + 1
+
+                // 1. Verifica solicitação de cancelamento antes de cada requisição diária
+                try {
+                  const checkRec = $app.findRecordById('flex_sync', syncId)
+                  const currentStatus = checkRec.getString('status')
+                  if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
+                    console.log(
+                      '[FlexSmart ' +
+                        syncId +
+                        '] Interrupção solicitada no início do dia ' +
+                        currentDayStr,
+                    )
+                    wasCancelled = true
+                    jobRec = checkRec
+                    break
+                  }
+                } catch (_) {}
+
+                // Atualiza status do dia corrente
+                try {
+                  jobRec.set('current_day_date', currentDayStr)
+                  jobRec.set(
+                    'current_step',
+                    'Dia ' +
+                      currentDayStr +
+                      ' — ' +
+                      dayNumber +
+                      ' de ' +
+                      countDays +
+                      ' dias (' +
+                      createdCount +
+                      ' novos, ' +
+                      updatedCount +
+                      ' atualizados)...',
                   )
-                  wasCancelled = true
-                  jobRec = checkRec
+                  $app.save(jobRec)
+                } catch (_) {}
+
+                // 2. Busca os clientes daquele dia no ERP
+                let dayList = []
+                try {
+                  dayList = fetchERPByDate(currentDayStr, false, (stepText) => {
+                    try {
+                      jobRec.set(
+                        'current_step',
+                        'Dia ' +
+                          currentDayStr +
+                          ' (' +
+                          dayNumber +
+                          '/' +
+                          countDays +
+                          '): ' +
+                          stepText,
+                      )
+                      $app.save(jobRec)
+                    } catch (_) {}
+                  })
+                } catch (dayFetchErr) {
+                  // Política de segurança: parar imediatamente em caso de erro, registrando a data exata e mensagem em pt-BR
+                  const errMsg =
+                    dayFetchErr && dayFetchErr.message ? dayFetchErr.message : String(dayFetchErr)
+                  console.log(
+                    '[FlexSmart ' + syncId + '] Erro na data ' + currentDayStr + ': ' + errMsg,
+                  )
+                  jobRec.set('status', 'error')
+                  jobRec.set('error', 'Falha no dia ' + currentDayStr + ': ' + errMsg)
+                  jobRec.set(
+                    'current_step',
+                    'Interrompido por erro no dia ' +
+                      currentDayStr +
+                      '. Clientes processados até então foram preservados.',
+                  )
+                  jobRec.set('current_day_date', currentDayStr)
+                  jobRec.set('processed_days', dayIndex)
+                  jobRec.set('imported', totalImportedCount)
+                  jobRec.set('created_count', createdCount)
+                  jobRec.set('updated_count', updatedCount)
+                  jobRec.set(
+                    'finished_at',
+                    new Date().toISOString().replace('T', ' ').substring(0, 19),
+                  )
+                  $app.save(jobRec)
+                  return
+                }
+
+                const countInDay = Array.isArray(dayList) ? dayList.length : 0
+                if (countInDay > 0 && typeof dayList[0] === 'object') {
+                  try {
+                    jobRec.set('sample', dayList[0])
+                  } catch (_) {}
+                }
+
+                let dayCreatedCount = 0
+                let dayUpdatedCount = 0
+                let dayErrorCount = 0
+
+                // 3. Processa cada cliente do array retornado no dia
+                for (let cIdx = 0; cIdx < countInDay; cIdx++) {
+                  // Checa cancelamento a cada 20 registros
+                  if (cIdx > 0 && cIdx % 20 === 0) {
+                    try {
+                      const checkRec = $app.findRecordById('flex_sync', syncId)
+                      const currentStatus = checkRec.getString('status')
+                      if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
+                        wasCancelled = true
+                        jobRec = checkRec
+                        break
+                      }
+                    } catch (_) {}
+                  }
+
+                  const item = dayList[cIdx]
+                  dayList[cIdx] = null
+
+                  if (!item || typeof item !== 'object') {
+                    continue
+                  }
+
+                  try {
+                    const resType = upsertClientRecord(
+                      item,
+                      ownerId,
+                      clientsCol,
+                      clientsByErpCode,
+                      clientsByDoc,
+                      cIdx + 1,
+                    )
+                    if (resType === 'updated') {
+                      updatedCount++
+                      dayUpdatedCount++
+                    } else {
+                      createdCount++
+                      dayCreatedCount++
+                    }
+                    totalImportedCount++
+                  } catch (saveErr) {
+                    dayErrorCount++
+                    console.log(
+                      '[FlexSmart ' +
+                        syncId +
+                        '] Erro ao salvar cliente #' +
+                        cIdx +
+                        ' na data ' +
+                        currentDayStr +
+                        ': ' +
+                        String(saveErr),
+                    )
+                  }
+                }
+
+                // Log explícito por dia exigido pelo usuário:
+                // total retornado pelo ERP e resultado do upsert (X criados, Y atualizados)
+                console.log(
+                  '[FlexSmart ' +
+                    syncId +
+                    '] [Dia ' +
+                    currentDayStr +
+                    '] ERP retornado: ' +
+                    countInDay +
+                    ' registros | Upsert: ' +
+                    dayCreatedCount +
+                    ' criados, ' +
+                    dayUpdatedCount +
+                    ' atualizados' +
+                    (dayErrorCount > 0 ? ', ' + dayErrorCount + ' erros' : '') +
+                    ' | Acumulado: ' +
+                    createdCount +
+                    ' criados, ' +
+                    updatedCount +
+                    ' atualizados (' +
+                    (dayIndex + 1) +
+                    '/' +
+                    countDays +
+                    ' dias)',
+                )
+
+                if (wasCancelled) {
                   break
                 }
-              } catch (_) {}
 
-              // Atualiza status do dia corrente
-              try {
-                jobRec.set('current_day_date', currentDayStr)
+                // Concluiu o dia
+                const processedDaysCount = dayIndex + 1
+                try {
+                  jobRec.set('current_day_date', currentDayStr)
+                  jobRec.set('processed_days', processedDaysCount)
+                  jobRec.set('imported', totalImportedCount)
+                  jobRec.set('created_count', createdCount)
+                  jobRec.set('updated_count', updatedCount)
+                  jobRec.set(
+                    'current_step',
+                    'Dia ' +
+                      currentDayStr +
+                      ' concluído (' +
+                      countInDay +
+                      ' no ERP) — ' +
+                      processedDaysCount +
+                      ' de ' +
+                      countDays +
+                      ' dias (' +
+                      createdCount +
+                      ' novos, ' +
+                      updatedCount +
+                      ' atualizados acumulados)...',
+                  )
+                  $app.save(jobRec)
+                } catch (_) {}
+              }
+
+              // Tratamento após loop diário
+              if (wasCancelled) {
+                jobRec.set('status', 'cancelled')
                 jobRec.set(
                   'current_step',
-                  'Dia ' +
-                    currentDayStr +
-                    ' — ' +
-                    dayNumber +
-                    ' de ' +
-                    countDays +
-                    ' dias (' +
+                  'Carga diária interrompida pelo usuário (' +
                     createdCount +
                     ' novos, ' +
                     updatedCount +
-                    ' atualizados)...',
+                    ' atualizados preservados).',
                 )
-                $app.save(jobRec)
-              } catch (_) {}
-
-              // 2. Busca os clientes daquele dia no ERP
-              let dayList = []
-              try {
-                dayList = fetchERPByDate(currentDayStr, false, (stepText) => {
-                  try {
-                    jobRec.set(
-                      'current_step',
-                      'Dia ' +
-                        currentDayStr +
-                        ' (' +
-                        dayNumber +
-                        '/' +
-                        countDays +
-                        '): ' +
-                        stepText,
-                    )
-                    $app.save(jobRec)
-                  } catch (_) {}
-                })
-              } catch (dayFetchErr) {
-                // Política de segurança: parar imediatamente em caso de erro, registrando a data exata e mensagem em pt-BR
-                const errMsg =
-                  dayFetchErr && dayFetchErr.message ? dayFetchErr.message : String(dayFetchErr)
-                console.log(
-                  '[FlexSmart ' + syncId + '] Erro na data ' + currentDayStr + ': ' + errMsg,
-                )
-                jobRec.set('status', 'error')
-                jobRec.set('error', 'Falha no dia ' + currentDayStr + ': ' + errMsg)
-                jobRec.set(
-                  'current_step',
-                  'Interrompido por erro no dia ' +
-                    currentDayStr +
-                    '. Clientes processados até então foram preservados.',
-                )
-                jobRec.set('current_day_date', currentDayStr)
-                jobRec.set('processed_days', dayIndex)
                 jobRec.set('imported', totalImportedCount)
                 jobRec.set('created_count', createdCount)
                 jobRec.set('updated_count', updatedCount)
@@ -843,144 +1005,169 @@ routerAdd(
                   new Date().toISOString().replace('T', ' ').substring(0, 19),
                 )
                 $app.save(jobRec)
+                console.log(
+                  '[FlexSmart ' +
+                    syncId +
+                    '] Carga dia a dia interrompida com segurança: criados=' +
+                    createdCount +
+                    ', atualizados=' +
+                    updatedCount,
+                )
                 return
               }
 
-              const countInDay = Array.isArray(dayList) ? dayList.length : 0
-              if (countInDay > 0 && typeof dayList[0] === 'object') {
-                try {
-                  jobRec.set('sample', dayList[0])
-                } catch (_) {}
-              }
-
-              let dayCreatedCount = 0
-              let dayUpdatedCount = 0
-              let dayErrorCount = 0
-
-              // 3. Processa cada cliente do array retornado no dia
-              for (let cIdx = 0; cIdx < countInDay; cIdx++) {
-                // Checa cancelamento a cada 20 registros
-                if (cIdx > 0 && cIdx % 20 === 0) {
-                  try {
-                    const checkRec = $app.findRecordById('flex_sync', syncId)
-                    const currentStatus = checkRec.getString('status')
-                    if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
-                      wasCancelled = true
-                      jobRec = checkRec
-                      break
-                    }
-                  } catch (_) {}
-                }
-
-                const item = dayList[cIdx]
-                dayList[cIdx] = null
-
-                if (!item || typeof item !== 'object') {
-                  continue
-                }
-
-                try {
-                  const resType = upsertClientRecord(
-                    item,
-                    ownerId,
-                    clientsCol,
-                    clientsByErpCode,
-                    clientsByDoc,
-                    cIdx + 1,
-                  )
-                  if (resType === 'updated') {
-                    updatedCount++
-                    dayUpdatedCount++
-                  } else {
-                    createdCount++
-                    dayCreatedCount++
-                  }
-                  totalImportedCount++
-                } catch (saveErr) {
-                  dayErrorCount++
-                  console.log(
-                    '[FlexSmart ' +
-                      syncId +
-                      '] Erro ao salvar cliente #' +
-                      cIdx +
-                      ' na data ' +
-                      currentDayStr +
-                      ': ' +
-                      String(saveErr),
-                  )
-                }
-              }
-
-              // Log explícito por dia exigido pelo usuário:
-              // total retornado pelo ERP e resultado do upsert (X criados, Y atualizados)
+              jobRec.set('status', 'done')
+              jobRec.set('imported', totalImportedCount)
+              jobRec.set('created_count', createdCount)
+              jobRec.set('updated_count', updatedCount)
+              jobRec.set('processed_days', countDays)
+              jobRec.set('current_day_date', todayStr)
+              jobRec.set(
+                'current_step',
+                'Carga completa concluída com sucesso! ' +
+                  countDays +
+                  ' dias verificados (' +
+                  createdCount +
+                  ' novos, ' +
+                  updatedCount +
+                  ' atualizados acumulados).',
+              )
+              jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+              $app.save(jobRec)
               console.log(
                 '[FlexSmart ' +
                   syncId +
-                  '] [Dia ' +
-                  currentDayStr +
-                  '] ERP retornado: ' +
-                  countInDay +
-                  ' registros | Upsert: ' +
-                  dayCreatedCount +
-                  ' criados, ' +
-                  dayUpdatedCount +
-                  ' atualizados' +
-                  (dayErrorCount > 0 ? ', ' + dayErrorCount + ' erros' : '') +
-                  ' | Acumulado: ' +
-                  createdCount +
-                  ' criados, ' +
-                  updatedCount +
-                  ' atualizados (' +
-                  (dayIndex + 1) +
-                  '/' +
+                  '] Carga dia a dia concluída com sucesso: totalDias=' +
                   countDays +
-                  ' dias)',
+                  ', criados=' +
+                  createdCount +
+                  ', atualizados=' +
+                  updatedCount,
               )
+              return
+            }
 
-              if (wasCancelled) {
-                break
-              }
+            // ==========================================
+            // MODO DIA ÚNICO (ONTEM OU HOJE)
+            // ==========================================
+            jobRec.set(
+              'current_step',
+              'Buscando clientes alterados na data ' + targetDate + ' no ERP...',
+            )
+            $app.save(jobRec)
 
-              // Concluiu o dia
-              const processedDaysCount = dayIndex + 1
+            const erpList = fetchERPByDate(targetDate, false, (stepText) => {
               try {
-                jobRec.set('current_day_date', currentDayStr)
-                jobRec.set('processed_days', processedDaysCount)
-                jobRec.set('imported', totalImportedCount)
-                jobRec.set('created_count', createdCount)
-                jobRec.set('updated_count', updatedCount)
-                jobRec.set(
-                  'current_step',
-                  'Dia ' +
-                    currentDayStr +
-                    ' concluído (' +
-                    countInDay +
-                    ' no ERP) — ' +
-                    processedDaysCount +
-                    ' de ' +
-                    countDays +
-                    ' dias (' +
-                    createdCount +
-                    ' novos, ' +
-                    updatedCount +
-                    ' atualizados acumulados)...',
-                )
+                jobRec.set('current_step', stepText)
                 $app.save(jobRec)
+              } catch (_) {}
+            })
+
+            const totalErp = erpList.length
+            console.log('[FlexSmart ' + syncId + '] Total recebido do ERP: ' + totalErp)
+
+            if (totalErp > 0 && typeof erpList[0] === 'object') {
+              try {
+                jobRec.set('sample', erpList[0])
               } catch (_) {}
             }
 
-            // Tratamento após loop diário
+            jobRec.set('count', totalErp)
+            jobRec.set('imported', 0)
+            jobRec.set('created_count', 0)
+            jobRec.set('updated_count', 0)
+
+            if (totalErp === 0) {
+              jobRec.set('status', 'done')
+              jobRec.set('current_step', 'Nenhum cliente retornado para a data ' + targetDate + '.')
+              jobRec.set('sync_date', targetDate)
+              jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+              $app.save(jobRec)
+              console.log(
+                '[FlexSmart ' + syncId + '] Concluído: 0 clientes alterados na data ' + targetDate,
+              )
+              return
+            }
+
+            jobRec.set('current_step', 'Processando ' + totalErp + ' clientes...')
+            $app.save(jobRec)
+
+            const BATCH_SIZE = 20
+
+            for (let i = 0; i < totalErp; i++) {
+              if (i % BATCH_SIZE === 0) {
+                try {
+                  const checkRec = $app.findRecordById('flex_sync', syncId)
+                  const currentStatus = checkRec.getString('status')
+                  if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
+                    console.log(
+                      '[FlexSmart ' + syncId + '] Interrupção solicitada detectada no índice ' + i,
+                    )
+                    wasCancelled = true
+                    jobRec = checkRec
+                    break
+                  }
+                } catch (_) {}
+              }
+
+              const item = erpList[i]
+              erpList[i] = null
+
+              if (!item || typeof item !== 'object') {
+                continue
+              }
+
+              try {
+                const resType = upsertClientRecord(
+                  item,
+                  ownerId,
+                  clientsCol,
+                  clientsByErpCode,
+                  clientsByDoc,
+                  i + 1,
+                )
+                if (resType === 'updated') {
+                  updatedCount++
+                } else {
+                  createdCount++
+                }
+              } catch (itemErr) {
+                console.log('[FlexSmart] Erro ao gravar cliente #' + i + ': ' + String(itemErr))
+              }
+
+              const processed = i + 1
+              if (processed % BATCH_SIZE === 0 || processed === totalErp) {
+                try {
+                  jobRec.set('imported', processed)
+                  jobRec.set('created_count', createdCount)
+                  jobRec.set('updated_count', updatedCount)
+                  jobRec.set(
+                    'current_step',
+                    'Processados ' +
+                      processed +
+                      ' de ' +
+                      totalErp +
+                      ' (' +
+                      createdCount +
+                      ' novos, ' +
+                      updatedCount +
+                      ' atualizados)...',
+                  )
+                  $app.save(jobRec)
+                } catch (_) {}
+              }
+            }
+
             if (wasCancelled) {
               jobRec.set('status', 'cancelled')
               jobRec.set(
                 'current_step',
-                'Carga diária interrompida pelo usuário (' +
+                'Importação interrompida pelo usuário (' +
                   createdCount +
-                  ' novos, ' +
+                  ' criados, ' +
                   updatedCount +
-                  ' atualizados preservados).',
+                  ' atualizados)',
               )
-              jobRec.set('imported', totalImportedCount)
               jobRec.set('created_count', createdCount)
               jobRec.set('updated_count', updatedCount)
               jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
@@ -988,7 +1175,7 @@ routerAdd(
               console.log(
                 '[FlexSmart ' +
                   syncId +
-                  '] Carga dia a dia interrompida com segurança: criados=' +
+                  '] Interrompido pelo usuário com sucesso: criados=' +
                   createdCount +
                   ', atualizados=' +
                   updatedCount,
@@ -997,227 +1184,61 @@ routerAdd(
             }
 
             jobRec.set('status', 'done')
-            jobRec.set('imported', totalImportedCount)
+            jobRec.set('imported', totalErp)
             jobRec.set('created_count', createdCount)
             jobRec.set('updated_count', updatedCount)
-            jobRec.set('processed_days', countDays)
-            jobRec.set('current_day_date', todayStr)
+            jobRec.set('sync_date', targetDate)
             jobRec.set(
               'current_step',
-              'Carga completa concluída com sucesso! ' +
-                countDays +
-                ' dias verificados (' +
+              'Concluído! ' +
                 createdCount +
                 ' novos, ' +
                 updatedCount +
-                ' atualizados acumulados).',
+                ' atualizados (data base ' +
+                targetDate +
+                ').',
             )
             jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
             $app.save(jobRec)
+
             console.log(
               '[FlexSmart ' +
                 syncId +
-                '] Carga dia a dia concluída com sucesso: totalDias=' +
-                countDays +
+                '] Finalizado com sucesso: total=' +
+                totalErp +
                 ', criados=' +
                 createdCount +
                 ', atualizados=' +
                 updatedCount,
             )
-            return
-          }
-
-          // ==========================================
-          // MODO DIA ÚNICO (ONTEM OU HOJE)
-          // ==========================================
-          jobRec.set(
-            'current_step',
-            'Buscando clientes alterados na data ' + targetDate + ' no ERP...',
-          )
-          $app.save(jobRec)
-
-          const erpList = fetchERPByDate(targetDate, false, (stepText) => {
+          } catch (err) {
+            const msg = err && err.message ? err.message : String(err)
+            console.log('[FlexSmart ' + syncId + '] Falha: ' + msg)
             try {
-              jobRec.set('current_step', stepText)
-              $app.save(jobRec)
-            } catch (_) {}
-          })
-
-          const totalErp = erpList.length
-          console.log('[FlexSmart ' + syncId + '] Total recebido do ERP: ' + totalErp)
-
-          if (totalErp > 0 && typeof erpList[0] === 'object') {
-            try {
-              jobRec.set('sample', erpList[0])
-            } catch (_) {}
-          }
-
-          jobRec.set('count', totalErp)
-          jobRec.set('imported', 0)
-          jobRec.set('created_count', 0)
-          jobRec.set('updated_count', 0)
-
-          if (totalErp === 0) {
-            jobRec.set('status', 'done')
-            jobRec.set('current_step', 'Nenhum cliente retornado para a data ' + targetDate + '.')
-            jobRec.set('sync_date', targetDate)
-            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(jobRec)
-            console.log(
-              '[FlexSmart ' + syncId + '] Concluído: 0 clientes alterados na data ' + targetDate,
-            )
-            return
-          }
-
-          jobRec.set('current_step', 'Processando ' + totalErp + ' clientes...')
-          $app.save(jobRec)
-
-          const BATCH_SIZE = 20
-
-          for (let i = 0; i < totalErp; i++) {
-            if (i % BATCH_SIZE === 0) {
-              try {
-                const checkRec = $app.findRecordById('flex_sync', syncId)
-                const currentStatus = checkRec.getString('status')
-                if (currentStatus === 'cancelling' || currentStatus === 'cancelled') {
-                  console.log(
-                    '[FlexSmart ' + syncId + '] Interrupção solicitada detectada no índice ' + i,
-                  )
-                  wasCancelled = true
-                  jobRec = checkRec
-                  break
-                }
-              } catch (_) {}
-            }
-
-            const item = erpList[i]
-            erpList[i] = null
-
-            if (!item || typeof item !== 'object') {
-              continue
-            }
-
-            try {
-              const resType = upsertClientRecord(
-                item,
-                ownerId,
-                clientsCol,
-                clientsByErpCode,
-                clientsByDoc,
-                i + 1,
-              )
-              if (resType === 'updated') {
-                updatedCount++
-              } else {
-                createdCount++
-              }
-            } catch (itemErr) {
-              console.log('[FlexSmart] Erro ao gravar cliente #' + i + ': ' + String(itemErr))
-            }
-
-            const processed = i + 1
-            if (processed % BATCH_SIZE === 0 || processed === totalErp) {
-              try {
-                jobRec.set('imported', processed)
-                jobRec.set('created_count', createdCount)
-                jobRec.set('updated_count', updatedCount)
-                jobRec.set(
-                  'current_step',
-                  'Processados ' +
-                    processed +
-                    ' de ' +
-                    totalErp +
-                    ' (' +
-                    createdCount +
-                    ' novos, ' +
-                    updatedCount +
-                    ' atualizados)...',
+              const freshRec = $app.findRecordById('flex_sync', syncId)
+              const st = freshRec.getString('status')
+              if (st === 'cancelling' || st === 'cancelled') {
+                freshRec.set('status', 'cancelled')
+                freshRec.set('current_step', 'Importação interrompida pelo usuário.')
+                freshRec.set(
+                  'finished_at',
+                  new Date().toISOString().replace('T', ' ').substring(0, 19),
                 )
-                $app.save(jobRec)
-              } catch (_) {}
-            }
+                $app.save(freshRec)
+              } else {
+                freshRec.set('status', 'error')
+                freshRec.set('error', msg)
+                freshRec.set('current_step', 'Erro: ' + msg.slice(0, 150))
+                freshRec.set(
+                  'finished_at',
+                  new Date().toISOString().replace('T', ' ').substring(0, 19),
+                )
+                $app.save(freshRec)
+              }
+            } catch (_) {}
           }
-
-          if (wasCancelled) {
-            jobRec.set('status', 'cancelled')
-            jobRec.set(
-              'current_step',
-              'Importação interrompida pelo usuário (' +
-                createdCount +
-                ' criados, ' +
-                updatedCount +
-                ' atualizados)',
-            )
-            jobRec.set('created_count', createdCount)
-            jobRec.set('updated_count', updatedCount)
-            jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-            $app.save(jobRec)
-            console.log(
-              '[FlexSmart ' +
-                syncId +
-                '] Interrompido pelo usuário com sucesso: criados=' +
-                createdCount +
-                ', atualizados=' +
-                updatedCount,
-            )
-            return
-          }
-
-          jobRec.set('status', 'done')
-          jobRec.set('imported', totalErp)
-          jobRec.set('created_count', createdCount)
-          jobRec.set('updated_count', updatedCount)
-          jobRec.set('sync_date', targetDate)
-          jobRec.set(
-            'current_step',
-            'Concluído! ' +
-              createdCount +
-              ' novos, ' +
-              updatedCount +
-              ' atualizados (data base ' +
-              targetDate +
-              ').',
-          )
-          jobRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-          $app.save(jobRec)
-
-          console.log(
-            '[FlexSmart ' +
-              syncId +
-              '] Finalizado com sucesso: total=' +
-              totalErp +
-              ', criados=' +
-              createdCount +
-              ', atualizados=' +
-              updatedCount,
-          )
-        } catch (err) {
-          const msg = err && err.message ? err.message : String(err)
-          console.log('[FlexSmart ' + syncId + '] Falha: ' + msg)
-          try {
-            const freshRec = $app.findRecordById('flex_sync', syncId)
-            const st = freshRec.getString('status')
-            if (st === 'cancelling' || st === 'cancelled') {
-              freshRec.set('status', 'cancelled')
-              freshRec.set('current_step', 'Importação interrompida pelo usuário.')
-              freshRec.set(
-                'finished_at',
-                new Date().toISOString().replace('T', ' ').substring(0, 19),
-              )
-              $app.save(freshRec)
-            } else {
-              freshRec.set('status', 'error')
-              freshRec.set('error', msg)
-              freshRec.set('current_step', 'Erro: ' + msg.slice(0, 150))
-              freshRec.set(
-                'finished_at',
-                new Date().toISOString().replace('T', ' ').substring(0, 19),
-              )
-              $app.save(freshRec)
-            }
-          } catch (_) {}
-        }
-      }, 0)
+        }, 0)
+      }
 
       return e.json(200, {
         success: true,
@@ -1354,7 +1375,577 @@ routerAdd(
   $apis.requireAuth(),
 )
 
-// 3. Rota para CONSULTAR o status do job de sincronização
+// 3. Rota para avançar passo da carga dia a dia (processa 1 dia por chamada se necessário)
+routerAdd(
+  'POST',
+  '/backend/v1/flexsmart/step-sync/{id}',
+  (e) => {
+    try {
+      const syncId = e.request.pathValue('id')
+      const authRecord = e.auth
+      const ownerId = authRecord ? authRecord.id : null
+
+      if (!ownerId) {
+        return e.json(401, { error: 'Usuário não autenticado' })
+      }
+
+      let syncRec = null
+      try {
+        syncRec = $app.findRecordById('flex_sync', syncId)
+      } catch (_) {
+        return e.json(404, { error: 'Sincronização não encontrada' })
+      }
+
+      if (syncRec.getString('owner') !== ownerId) {
+        return e.json(403, { error: 'Sem permissão para este registro' })
+      }
+
+      const status = syncRec.getString('status')
+      const syncMode = syncRec.getString('sync_mode')
+
+      if (status === 'cancelling' || status === 'cancelled') {
+        syncRec.set('status', 'cancelled')
+        syncRec.set('current_step', 'Importação interrompida pelo usuário.')
+        syncRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+        $app.save(syncRec)
+        return e.json(200, {
+          success: true,
+          status: 'cancelled',
+          message: 'Importação interrompida com segurança.',
+          done: true,
+        })
+      }
+
+      if (status !== 'running' && status !== 'pending') {
+        return e.json(200, {
+          success: true,
+          status: status,
+          message: 'Job não está em execução ativa.',
+          done: true,
+        })
+      }
+      if (syncMode !== 'day_by_day') {
+        return e.json(200, {
+          success: true,
+          status: status,
+          message: 'Job não é do tipo day_by_day.',
+          done: false,
+        })
+      }
+
+      // Lock de concorrência por job
+      const lockKey = 'flexsmart_step_lock_' + syncId
+      const nowMs = Date.now()
+      let lockAcquired = false
+
+      try {
+        if ($app.store) {
+          const currentLock = $app.store().has(lockKey) ? Number($app.store().get(lockKey)) : 0
+          if (!currentLock || nowMs - currentLock > 45000) {
+            $app.store().set(lockKey, String(nowMs))
+            lockAcquired = true
+          }
+        } else {
+          lockAcquired = true
+        }
+      } catch (_) {
+        lockAcquired = true
+      }
+
+      if (!lockAcquired) {
+        return e.json(200, {
+          success: true,
+          status: status,
+          message: 'Passo já em processamento no momento.',
+          locked: true,
+        })
+      }
+
+      try {
+        if (syncRec.getString('status') === 'pending') {
+          syncRec.set('status', 'running')
+          syncRec.set('started_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+          $app.save(syncRec)
+        }
+
+        function formatDateToBRStep(d) {
+          const day = String(d.getDate()).padStart(2, '0')
+          const month = String(d.getMonth() + 1).padStart(2, '0')
+          const year = d.getFullYear()
+          return day + '/' + month + '/' + year
+        }
+
+        function generateDateRangeBRStep(startDateStr, endDateObj) {
+          const parts = startDateStr.split('/')
+          const startDay = parseInt(parts[0], 10)
+          const startMonth = parseInt(parts[1], 10) - 1
+          const startYear = parseInt(parts[2], 10)
+
+          const current = new Date(startYear, startMonth, startDay, 12, 0, 0)
+          const end = new Date(
+            endDateObj.getFullYear(),
+            endDateObj.getMonth(),
+            endDateObj.getDate(),
+            12,
+            0,
+            0,
+          )
+
+          const dates = []
+          while (current.getTime() <= end.getTime()) {
+            dates.push(formatDateToBRStep(current))
+            current.setDate(current.getDate() + 1)
+          }
+          return dates
+        }
+
+        const syncStartDate = syncRec.getString('sync_start_date') || '01/09/2026'
+        const datesToProcess = generateDateRangeBRStep(syncStartDate, new Date())
+        const countDays = datesToProcess.length
+        let processedDays = syncRec.getInt('processed_days') || 0
+
+        if (processedDays >= countDays) {
+          syncRec.set('status', 'done')
+          syncRec.set('processed_days', countDays)
+          syncRec.set(
+            'current_step',
+            'Carga completa concluída com sucesso! ' + countDays + ' dias verificados.',
+          )
+          syncRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+          $app.save(syncRec)
+          return e.json(200, {
+            success: true,
+            status: 'done',
+            processedDays: countDays,
+            totalDays: countDays,
+            done: true,
+          })
+        }
+
+        const currentDayStr = datesToProcess[processedDays]
+        const dayNumber = processedDays + 1
+
+        syncRec.set('total_days', countDays)
+        syncRec.set('current_day_date', currentDayStr)
+        syncRec.set(
+          'current_step',
+          'Dia ' + currentDayStr + ' — ' + dayNumber + ' de ' + countDays + ' dias...',
+        )
+        $app.save(syncRec)
+
+        // Login no ERP FlexSmart
+        const username =
+          $os.getenv('FLEXSMART_USERNAME') ||
+          ($secrets && $secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '')
+        const password =
+          $os.getenv('FLEXSMART_PASSWORD') ||
+          ($secrets && $secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '')
+
+        if (!username || !password) {
+          throw new Error(
+            'Credenciais FlexSmart não configuradas (FLEXSMART_USERNAME / FLEXSMART_PASSWORD)',
+          )
+        }
+
+        let token = ''
+        const now = Date.now()
+        try {
+          if (
+            $app.store &&
+            $app.store().has('flexsmart_cached_token') &&
+            $app.store().has('flexsmart_token_time')
+          ) {
+            const cached = $app.store().get('flexsmart_cached_token')
+            const time = Number($app.store().get('flexsmart_token_time')) || 0
+            if (cached && now - time < 3600000) {
+              token = String(cached)
+            }
+          }
+        } catch (_) {}
+
+        if (!token) {
+          const loginRes = $http.send({
+            url: 'https://api.impave.com.br:8443/login?Content-Type=application/json',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: username, password: password }),
+            timeout: 30,
+          })
+
+          let loginJson = loginRes.json
+          if (!loginJson && loginRes.raw) {
+            try {
+              loginJson = JSON.parse(loginRes.raw)
+            } catch (_) {}
+          }
+          token = loginJson && loginJson.access_token ? String(loginJson.access_token).trim() : ''
+          if (!token) {
+            throw new Error('Falha no login do ERP FlexSmart: token não retornado')
+          }
+          try {
+            if ($app.store) {
+              $app.store().set('flexsmart_cached_token', token)
+              $app.store().set('flexsmart_token_time', String(now))
+            }
+          } catch (_) {}
+        }
+
+        // Busca clientes no ERP para o dia corrente
+        const rawBase =
+          $os.getenv('FLEXSMART_BASE_URL') ||
+          ($secrets && $secrets.has('FLEXSMART_BASE_URL')
+            ? $secrets.get('FLEXSMART_BASE_URL')
+            : '') ||
+          'https://api.impave.com.br:8443'
+        const base = rawBase.replace(/\/+$/, '')
+
+        let getRes = null
+        try {
+          getRes = $http.send({
+            url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(currentDayStr),
+            method: 'GET',
+            headers: { AuthToken: token, Accept: 'application/json' },
+            timeout: 60,
+          })
+        } catch (fetchErr) {
+          throw new Error('Erro na conexão com ERP FlexSmart: ' + String(fetchErr))
+        }
+
+        if (getRes.statusCode < 200 || getRes.statusCode >= 300) {
+          throw new Error(
+            'ERP retornou status ' + getRes.statusCode + ' para data ' + currentDayStr,
+          )
+        }
+
+        let dayList = []
+        if (Array.isArray(getRes.json)) {
+          dayList = getRes.json
+        } else if (getRes.raw) {
+          try {
+            const p = JSON.parse(getRes.raw)
+            if (Array.isArray(p)) dayList = p
+            else if (p && typeof p === 'object') {
+              for (const k of [
+                'dados',
+                'data',
+                'clientes',
+                'clients',
+                'content',
+                'items',
+                'lista',
+              ]) {
+                if (Array.isArray(p[k])) {
+                  dayList = p[k]
+                  break
+                }
+              }
+              if (dayList.length === 0 && (p.cdCliente || p.nmCliente || p.cnpjCpf)) {
+                dayList = [p]
+              }
+            }
+          } catch (_) {}
+        }
+
+        const countInDay = Array.isArray(dayList) ? dayList.length : 0
+
+        // Helpers locais para upsert
+        function cleanDigitsLocal(val) {
+          if (!val) return ''
+          return String(val).replace(/\D/g, '')
+        }
+
+        function pickFirstLocal(obj, keys) {
+          if (!obj) return ''
+          for (let i = 0; i < keys.length; i++) {
+            const k = keys[i]
+            if (obj[k] !== undefined && obj[k] !== null && String(obj[k]).trim() !== '') {
+              return String(obj[k]).trim()
+            }
+          }
+          return ''
+        }
+
+        const existingRecords = $app.findRecordsByFilter(
+          'clients',
+          'owner = {:owner}',
+          '-created',
+          100000,
+          0,
+          { owner: ownerId },
+        )
+        const clientsByErpCode = new Map()
+        const clientsByDoc = new Map()
+        for (const rec of existingRecords) {
+          const erpCode = rec.getString('erp_code')
+          const doc = cleanDigitsLocal(rec.getString('document'))
+          if (erpCode) clientsByErpCode.set(erpCode, rec)
+          if (doc) clientsByDoc.set(doc, rec)
+        }
+        const clientsCol = $app.findCollectionByNameOrId('clients')
+
+        let dayCreatedCount = 0
+        let dayUpdatedCount = 0
+        let dayErrorCount = 0
+        let createdCount = syncRec.getInt('created_count') || 0
+        let updatedCount = syncRec.getInt('updated_count') || 0
+        let totalImportedCount = syncRec.getInt('imported') || 0
+
+        for (let cIdx = 0; cIdx < countInDay; cIdx++) {
+          const item = dayList[cIdx]
+          if (!item || typeof item !== 'object') continue
+
+          try {
+            const erpCode = pickFirstLocal(item, [
+              'cdCliente',
+              'cd_cliente',
+              'codCliente',
+              'codigoCliente',
+              'codigo',
+              'id',
+            ])
+            const docClean = cleanDigitsLocal(
+              pickFirstLocal(item, [
+                'cnpjCpf',
+                'cnpj_cpf',
+                'cpfCnpj',
+                'cpf_cnpj',
+                'cnpj',
+                'cpf',
+                'documento',
+                'doc',
+                'nrDocumento',
+              ]),
+            )
+            const nameRaw = pickFirstLocal(item, [
+              'nmCliente',
+              'nmFantasia',
+              'nomeCliente',
+              'razaoSocial',
+              'razao_social',
+              'nome_fantasia',
+              'nomeFantasia',
+              'nome',
+              'dsNome',
+            ])
+            const emailRaw = pickFirstLocal(item, [
+              'email',
+              'emailNfe',
+              'emailCompras',
+              'e_mail',
+              'dsEmail',
+              'mail',
+            ])
+            const phoneRaw = pickFirstLocal(item, [
+              'celular',
+              'fone',
+              'telefone',
+              'nrTelefone',
+              'phone',
+              'tel',
+            ])
+            const logradouro = pickFirstLocal(item, [
+              'enderecoLogradouro',
+              'logradouro',
+              'endereco',
+              'rua',
+            ])
+            const numero = pickFirstLocal(item, ['enderecoNumero', 'numero', 'nrEndereco'])
+            const complemento = pickFirstLocal(item, [
+              'enderecoComplemento',
+              'complemento',
+              'dsComplemento',
+            ])
+
+            let bairro = ''
+            if (item.bairro && typeof item.bairro === 'object') {
+              bairro = pickFirstLocal(item.bairro, ['nmBairro', 'dsBairro', 'nome'])
+            }
+            if (!bairro) {
+              bairro = pickFirstLocal(item, ['bairro', 'dsBairro', 'nmBairro'])
+            }
+
+            let fullAddressParts = []
+            if (logradouro) {
+              let addr = logradouro
+              if (numero) addr += ', ' + numero
+              if (complemento) addr += ' (' + complemento + ')'
+              if (bairro) addr += ' - ' + bairro
+              fullAddressParts.push(addr)
+            }
+            const address = fullAddressParts.join(', ')
+
+            let cityRaw = ''
+            let stateRaw = ''
+            if (item.cidade && typeof item.cidade === 'object') {
+              cityRaw = pickFirstLocal(item.cidade, ['nmCidade', 'nome', 'dsCidade'])
+              stateRaw = pickFirstLocal(item.cidade, ['uf', 'sgUf', 'siglaUf', 'estado'])
+            }
+            if (!cityRaw) {
+              cityRaw = pickFirstLocal(item, ['nmCidade', 'cidade', 'municipio', 'dsCidade'])
+            }
+            if (!stateRaw) {
+              stateRaw = pickFirstLocal(item, ['uf', 'sgUf', 'siglaUf', 'estado', 'dsUf'])
+            }
+
+            let name = nameRaw
+            if (!name || name.trim().length < 2) {
+              name = 'Cliente ' + (erpCode || docClean || cIdx + 1)
+            }
+
+            let targetRecord = null
+            if (erpCode && clientsByErpCode.has(erpCode)) {
+              targetRecord = clientsByErpCode.get(erpCode)
+            } else if (docClean && clientsByDoc.has(docClean)) {
+              targetRecord = clientsByDoc.get(docClean)
+            }
+
+            const isUpdate = !!targetRecord
+            const rec = targetRecord || new Record(clientsCol)
+
+            if (!isUpdate) {
+              rec.set('owner', ownerId)
+            }
+
+            rec.set('name', name)
+            if (erpCode) rec.set('erp_code', erpCode)
+            if (docClean) rec.set('document', docClean)
+
+            if (emailRaw && typeof emailRaw === 'string' && emailRaw.indexOf('@') > 0) {
+              const emailTrimmed = emailRaw.trim().toLowerCase()
+              const emailValid =
+                /^[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(
+                  emailTrimmed,
+                )
+              if (emailValid && emailTrimmed.length <= 254) {
+                rec.set('email', emailTrimmed)
+              }
+            }
+
+            if (phoneRaw) rec.set('phone', cleanDigitsLocal(phoneRaw))
+            if (address) rec.set('address', address)
+            if (cityRaw) rec.set('city', cityRaw)
+            if (stateRaw) rec.set('state', stateRaw.toUpperCase().slice(0, 2))
+
+            $app.save(rec)
+
+            if (erpCode) clientsByErpCode.set(erpCode, rec)
+            if (docClean) clientsByDoc.set(docClean, rec)
+
+            if (isUpdate) {
+              updatedCount++
+              dayUpdatedCount++
+            } else {
+              createdCount++
+              dayCreatedCount++
+            }
+            totalImportedCount++
+          } catch (saveErr) {
+            dayErrorCount++
+            console.log(
+              '[FlexSmart ' +
+                syncId +
+                '] Erro ao salvar cliente #' +
+                cIdx +
+                ' no step: ' +
+                String(saveErr),
+            )
+          }
+        }
+
+        console.log(
+          '[FlexSmart ' +
+            syncId +
+            '] [Dia ' +
+            currentDayStr +
+            '] ERP retornado: ' +
+            countInDay +
+            ' registros | Upsert: ' +
+            dayCreatedCount +
+            ' criados, ' +
+            dayUpdatedCount +
+            ' atualizados' +
+            (dayErrorCount > 0 ? ', ' + dayErrorCount + ' erros' : '') +
+            ' | Acumulado: ' +
+            createdCount +
+            ' criados, ' +
+            updatedCount +
+            ' atualizados (' +
+            dayNumber +
+            '/' +
+            countDays +
+            ' dias)',
+        )
+
+        processedDays++
+        syncRec.set('processed_days', processedDays)
+        syncRec.set('current_day_date', currentDayStr)
+        syncRec.set('imported', totalImportedCount)
+        syncRec.set('created_count', createdCount)
+        syncRec.set('updated_count', updatedCount)
+
+        const isFinished = processedDays >= countDays
+        if (isFinished) {
+          syncRec.set('status', 'done')
+          syncRec.set(
+            'current_step',
+            'Carga completa concluída com sucesso! ' +
+              countDays +
+              ' dias verificados (' +
+              createdCount +
+              ' novos, ' +
+              updatedCount +
+              ' atualizados acumulados).',
+          )
+          syncRec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+        } else {
+          syncRec.set(
+            'current_step',
+            'Dia ' +
+              currentDayStr +
+              ' concluído (' +
+              countInDay +
+              ' no ERP) — ' +
+              processedDays +
+              ' de ' +
+              countDays +
+              ' dias (' +
+              createdCount +
+              ' novos, ' +
+              updatedCount +
+              ' atualizados acumulados)...',
+          )
+        }
+
+        $app.save(syncRec)
+
+        return e.json(200, {
+          success: true,
+          status: isFinished ? 'done' : 'running',
+          processedDays: processedDays,
+          totalDays: countDays,
+          currentDayDate: currentDayStr,
+          imported: totalImportedCount,
+          createdCount: createdCount,
+          updatedCount: updatedCount,
+          done: isFinished,
+        })
+      } finally {
+        try {
+          if ($app.store) {
+            $app.store().remove(lockKey)
+          }
+        } catch (_) {}
+      }
+    } catch (err) {
+      const msg = err && err.message ? err.message : String(err)
+      console.log('[FlexSmart step-sync] Erro: ' + msg)
+      return e.json(500, { error: msg })
+    }
+  },
+  $apis.requireAuth(),
+)
+
+// 4. Rota para CONSULTAR o status do job de sincronização
 routerAdd(
   'GET',
   '/backend/v1/flexsmart/sync-status/{id}',
@@ -1401,7 +1992,7 @@ routerAdd(
       } else {
         const isDayByDayCheck =
           rec.getString('sync_mode') === 'day_by_day' || rec.getBool('is_full_sync')
-        const runningThreshold = isDayByDayCheck ? 300000 : 120000
+        const runningThreshold = isDayByDayCheck ? 600000 : 120000
         if (currentStatus === 'running' && timeSinceUpdate > runningThreshold) {
           try {
             currentStatus = 'error'
@@ -1510,7 +2101,7 @@ routerAdd(
 
       const isDayByDayMode =
         rec.getString('sync_mode') === 'day_by_day' || rec.getBool('is_full_sync')
-      const staleRunningThresholdMs = isDayByDayMode ? 300000 : 120000
+      const staleRunningThresholdMs = isDayByDayMode ? 600000 : 120000
 
       if (statusVal === 'cancelling' && timeSinceUpdate > 15000) {
         try {

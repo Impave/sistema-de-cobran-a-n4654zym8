@@ -86,6 +86,29 @@ export const clientsService = {
     return res
   },
 
+  async stepFlexSmartSync(syncId: string): Promise<{
+    success: boolean
+    status: string
+    processedDays?: number
+    totalDays?: number
+    currentDayDate?: string
+    done?: boolean
+    error?: string
+  }> {
+    const res = await pb.send<{
+      success: boolean
+      status: string
+      processedDays?: number
+      totalDays?: number
+      currentDayDate?: string
+      done?: boolean
+      error?: string
+    }>(`/backend/v1/flexsmart/step-sync/${syncId}`, {
+      method: 'POST',
+    })
+    return res
+  },
+
   async cancelFlexSmartSync(syncId: string): Promise<FlexSmartCancelSyncResult> {
     const res = await pb.send<FlexSmartCancelSyncResult>(
       `/backend/v1/flexsmart/cancel-sync/${syncId}`,

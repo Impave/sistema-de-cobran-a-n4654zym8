@@ -337,9 +337,9 @@ export default function ClientsPage() {
 
         // Timeout de segurança no frontend: no modo day_by_day cada dia pode levar até 60s,
         // então não interrompemos por timeout estático de 90s global; em vez disso,
-        // respeitamos o status real do backend ou 1 hora total no modo diário (120s no modo data única)
+        // respeitamos o status real do backend ou 2 horas total no modo diário (180s no modo data única)
         const isDayByDayPolling = activeSync.syncMode === 'day_by_day' || activeSync.isFullSync
-        const runningMaxDurationMs = isDayByDayPolling ? 3600000 : 120000
+        const runningMaxDurationMs = isDayByDayPolling ? 7200000 : 180000
 
         if (activeSync.status === 'running' && Date.now() - startTime > runningMaxDurationMs) {
           clearInterval(interval)
@@ -363,7 +363,30 @@ export default function ClientsPage() {
           return
         }
 
-        const status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
+        // No modo day_by_day, cada iteração avança 1 dia com stepFlexSmartSync.
+        // O status retornado já traz a posição atualizada dia a dia.
+        let status: FlexSmartSyncStatus
+        if (
+          isDayByDayPolling &&
+          (activeSync.status === 'pending' || activeSync.status === 'running')
+        ) {
+          try {
+            await clientsService.stepFlexSmartSync(activeSync.id)
+          } catch (stepErr) {
+            console.warn('[ClientsPage] Aviso ao acionar passo do dia:', stepErr)
+          }
+          status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
+          // Se completou pelo menos um dia ou finalizou, atualiza a lista de clientes na tabela
+          if (
+            status.status === 'done' ||
+            (status.processedDays && status.processedDays > (activeSync.processedDays || 0))
+          ) {
+            loadData()
+          }
+        } else {
+          status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
+        }
+
         setActiveSync(status)
 
         if (status.status === 'cancelled') {
@@ -469,22 +492,29 @@ export default function ClientsPage() {
     setSyncLoading(true)
     try {
       const isDayByDay = options?.mode === 'day_by_day'
-      const res = await clientsService.startFlexSmartSync(
-        options
-          ? {
-              date: options.date,
-              startDate: options.startDate,
-              mode: options.mode,
-            }
-          : undefined,
-      )
+      const formattedStartDate = options?.startDate
+        ? options.startDate.includes('-')
+          ? formatISOToBR(options.startDate)
+          : options.startDate
+        : undefined
+      const formattedDate = options?.date
+        ? options.date.includes('-')
+          ? formatISOToBR(options.date)
+          : options.date
+        : undefined
+
+      const payload = {
+        date: formattedDate,
+        startDate: formattedStartDate,
+        mode: options?.mode || 'single_date',
+      }
+
+      const res = await clientsService.startFlexSmartSync(payload)
       if (res.syncId) {
         const targetDate = res.targetDate || 'ontem'
         const isDayByDayMode = res.syncMode === 'day_by_day' || isDayByDay
         const totalDays = res.totalDays || 1
-        const initialDateStr =
-          res.syncStartDate ||
-          (options?.startDate ? formatISOToBR(options.startDate) : '01/09/2026')
+        const initialDateStr = res.syncStartDate || formattedStartDate || '01/09/2026'
         setActiveSync({
           id: res.syncId,
           status: 'pending',

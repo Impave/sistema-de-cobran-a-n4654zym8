@@ -331,8 +331,13 @@ export default function ClientsPage() {
           return
         }
 
-        // Timeout de segurança no frontend para job em 'running' sem resposta por mais de 90s
-        if (activeSync.status === 'running' && Date.now() - startTime > 90000) {
+        // Timeout de segurança no frontend: no modo day_by_day cada dia pode levar até 60s,
+        // então não interrompemos por timeout estático de 90s global; em vez disso,
+        // respeitamos o status real do backend ou 1 hora total no modo diário (120s no modo data única)
+        const isDayByDayPolling = activeSync.syncMode === 'day_by_day' || activeSync.isFullSync
+        const runningMaxDurationMs = isDayByDayPolling ? 3600000 : 120000
+
+        if (activeSync.status === 'running' && Date.now() - startTime > runningMaxDurationMs) {
           clearInterval(interval)
           setSyncLoading(false)
           setCancellingSync(false)
@@ -342,13 +347,13 @@ export default function ClientsPage() {
                   ...prev,
                   status: 'error',
                   currentStep: 'Tempo limite de sincronização excedido.',
-                  error: 'O servidor não respondeu a tempo. Tente novamente.',
+                  error: 'O tempo limite da sincronização foi atingido. Tente novamente.',
                 }
               : null,
           )
           toast({
             title: 'Tempo limite excedido',
-            description: 'A resposta do ERP demorou além do limite de tempo. Tente novamente.',
+            description: 'A resposta do ERP demorou além do limite tolerado. Tente novamente.',
             variant: 'destructive',
           })
           return
@@ -791,10 +796,20 @@ export default function ClientsPage() {
                   <span>
                     {activeSync.syncMode === 'day_by_day' || activeSync.isFullSync ? (
                       <>
-                        {activeSync.currentDayDate ? `Dia ${activeSync.currentDayDate} — ` : ''}
-                        {activeSync.totalDays
-                          ? `${activeSync.processedDays ?? 0} de ${activeSync.totalDays} dias`
-                          : 'Processando dias'}{' '}
+                        {activeSync.status === 'done'
+                          ? `Todos os ${activeSync.totalDays ?? activeSync.processedDays ?? 0} dias concluídos (01/09/2026 → hoje)`
+                          : activeSync.currentDayDate
+                            ? `Dia ${activeSync.currentDayDate} — ${
+                                activeSync.status === 'running'
+                                  ? Math.min(
+                                      (activeSync.processedDays ?? 0) + 1,
+                                      activeSync.totalDays ?? 1,
+                                    )
+                                  : (activeSync.processedDays ?? 0)
+                              } de ${activeSync.totalDays ?? '?'} dias`
+                            : activeSync.totalDays
+                              ? `${activeSync.processedDays ?? 0} de ${activeSync.totalDays} dias`
+                              : 'Processando dias'}{' '}
                         ({activeSync.createdCount} novos, {activeSync.updatedCount} atualizados
                         acumulados)
                       </>

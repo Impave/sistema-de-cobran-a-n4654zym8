@@ -99,6 +99,7 @@ routerAdd(
         const startMonth = parseInt(parts[1], 10) - 1
         const startYear = parseInt(parts[2], 10)
 
+        // Usar UTC/horário do meio-dia para evitar variações de fuso horário / horário de verão
         const current = new Date(startYear, startMonth, startDay, 12, 0, 0)
         const end = new Date(
           endDateObj.getFullYear(),
@@ -634,7 +635,11 @@ routerAdd(
           }
 
           if (emailRaw && emailRaw.indexOf('@') > 0) {
-            rec.set('email', emailRaw)
+            // Garante que o email seja válido segundo regex básico antes de atribuir para evitar rejeição por validação do PB
+            const emailTrimmed = emailRaw.trim()
+            if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrimmed)) {
+              rec.set('email', emailTrimmed)
+            }
           }
 
           if (phoneRaw) {
@@ -871,6 +876,7 @@ routerAdd(
               // Concluiu o dia
               const processedDaysCount = dayIndex + 1
               try {
+                jobRec.set('current_day_date', currentDayStr)
                 jobRec.set('processed_days', processedDaysCount)
                 jobRec.set('imported', totalImportedCount)
                 jobRec.set('created_count', createdCount)
@@ -1320,15 +1326,20 @@ routerAdd(
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
         } catch (_) {}
-      } else if (currentStatus === 'running' && timeSinceUpdate > 120000) {
-        try {
-          currentStatus = 'error'
-          rec.set('status', 'error')
-          rec.set('error', 'O tempo limite de sincronização foi atingido sem resposta.')
-          rec.set('current_step', 'Falha por tempo limite.')
-          rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
-          $app.save(rec)
-        } catch (_) {}
+      } else {
+        const isDayByDayCheck =
+          rec.getString('sync_mode') === 'day_by_day' || rec.getBool('is_full_sync')
+        const runningThreshold = isDayByDayCheck ? 300000 : 120000
+        if (currentStatus === 'running' && timeSinceUpdate > runningThreshold) {
+          try {
+            currentStatus = 'error'
+            rec.set('status', 'error')
+            rec.set('error', 'O tempo limite de sincronização foi atingido sem resposta do ERP.')
+            rec.set('current_step', 'Falha por tempo limite de inatividade.')
+            rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
+            $app.save(rec)
+          } catch (_) {}
+        }
       }
 
       const total = rec.getInt('count')
@@ -1425,7 +1436,11 @@ routerAdd(
       const lastUpdated = new Date(rec.getString('updated') || rec.getString('created')).getTime()
       const timeSinceUpdate = Date.now() - lastUpdated
 
-      if (statusVal === 'cancelling' && timeSinceUpdate > 10000) {
+      const isDayByDayMode =
+        rec.getString('sync_mode') === 'day_by_day' || rec.getBool('is_full_sync')
+      const staleRunningThresholdMs = isDayByDayMode ? 300000 : 120000
+
+      if (statusVal === 'cancelling' && timeSinceUpdate > 15000) {
         try {
           statusVal = 'cancelled'
           rec.set('status', 'cancelled')
@@ -1440,17 +1455,16 @@ routerAdd(
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
         } catch (_) {}
-      } else if (statusVal === 'running' && timeSinceUpdate > 120000) {
+      } else if (statusVal === 'running' && timeSinceUpdate > staleRunningThresholdMs) {
         try {
           statusVal = 'error'
           rec.set('status', 'error')
-          rec.set('error', 'Tempo limite atingido.')
+          rec.set('error', 'Tempo limite atingido sem resposta do ERP.')
           rec.set('current_step', 'Falha por tempo limite.')
           rec.set('finished_at', new Date().toISOString().replace('T', ' ').substring(0, 19))
           $app.save(rec)
         } catch (_) {}
       }
-
       const total = rec.getInt('count')
       const imported = rec.getInt('imported')
       const totalDays = rec.getInt('total_days')

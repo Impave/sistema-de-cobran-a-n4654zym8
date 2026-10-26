@@ -50,17 +50,20 @@ const STATUS_LABELS: Record<string, string> = {
 
 export default function Dashboard() {
   const [clients, setClients] = useState<ClientRecord[]>([])
+  const [totalClientsCount, setTotalClientsCount] = useState<number>(0)
   const [charges, setCharges] = useState<ChargeRecord[]>([])
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
 
   const loadData = useCallback(async () => {
     try {
-      const [allClients, allCharges] = await Promise.all([
-        clientsService.getAll(),
+      const [count, clientsResp, allCharges] = await Promise.all([
+        clientsService.count(),
+        clientsService.getList({ page: 1, perPage: 100, sort: '-created' }),
         chargesService.getAll(),
       ])
-      setClients(allClients)
+      setTotalClientsCount(count)
+      setClients(clientsResp.items)
       setCharges(allCharges)
     } catch (err) {
       console.error('Erro ao carregar dados do dashboard:', err)
@@ -84,7 +87,7 @@ export default function Dashboard() {
 
   // Estatísticas computadas
   const stats = useMemo(() => {
-    const totalClients = clients.length
+    const totalClients = totalClientsCount || clients.length
 
     // Cobranças Abertas: pending ou overdue
     const openCharges = charges.filter((c) => c.status === 'pending' || c.status === 'overdue')

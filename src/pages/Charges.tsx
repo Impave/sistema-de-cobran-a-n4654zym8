@@ -80,12 +80,12 @@ export default function ChargesPage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [allCharges, allClients] = await Promise.all([
+      const [allCharges, clientsResp] = await Promise.all([
         chargesService.getAll(),
-        clientsService.getAll(),
+        clientsService.getList({ page: 1, perPage: 200, sort: 'name' }),
       ])
       setCharges(allCharges)
-      setClients(allClients)
+      setClients(clientsResp.items)
     } catch (err) {
       console.error('Erro ao carregar cobranças:', err)
     } finally {

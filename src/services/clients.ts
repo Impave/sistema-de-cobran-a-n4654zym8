@@ -7,6 +7,14 @@ import type {
   FlexSmartCancelSyncResult,
 } from '@/types'
 
+export interface ClientsPaginatedResponse {
+  items: ClientRecord[]
+  page: number
+  perPage: number
+  totalItems: number
+  totalPages: number
+}
+
 export const clientsService = {
   async getAll(): Promise<ClientRecord[]> {
     const records = await pb.collection('clients').getFullList<ClientRecord>({
@@ -14,6 +22,54 @@ export const clientsService = {
       requestKey: null,
     })
     return records
+  },
+
+  async getList(params?: {
+    page?: number
+    perPage?: number
+    search?: string
+    sort?: string
+  }): Promise<ClientsPaginatedResponse> {
+    const page = params?.page && params.page > 0 ? params.page : 1
+    const perPage = params?.perPage && params.perPage > 0 ? params.perPage : 20
+    const sort = params?.sort || '-created'
+
+    let filter = ''
+    const q = params?.search?.trim()
+    if (q) {
+      const cleanDigits = q.replace(/\D/g, '')
+      // Escapa aspas para segurança no PocketBase filter
+      const safeQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+      const conditions: string[] = [`name ~ "${safeQ}"`, `email ~ "${safeQ}"`]
+      if (cleanDigits) {
+        conditions.push(`document ~ "${cleanDigits}"`)
+        conditions.push(`phone ~ "${cleanDigits}"`)
+        conditions.push(`erp_code = "${cleanDigits}"`)
+      }
+      filter = conditions.join(' || ')
+    }
+
+    const res = await pb.collection('clients').getList<ClientRecord>(page, perPage, {
+      sort,
+      filter: filter || undefined,
+      requestKey: null,
+    })
+
+    return {
+      items: res.items,
+      page: res.page,
+      perPage: res.perPage,
+      totalItems: res.totalItems,
+      totalPages: res.totalPages,
+    }
+  },
+
+  async count(): Promise<number> {
+    const res = await pb.collection('clients').getList<ClientRecord>(1, 1, {
+      fields: 'id',
+      requestKey: null,
+    })
+    return res.totalItems
   },
 
   async getById(id: string): Promise<ClientRecord> {

@@ -22,6 +22,10 @@ import {
   ChevronDown,
   Calendar,
   Database,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -59,6 +63,13 @@ export default function ClientsPage() {
   const [charges, setCharges] = useState<ChargeRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  // Paginação server-side
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+  const [totalItems, setTotalItems] = useState(0)
+  const [totalPages, setTotalPages] = useState(1)
 
   // Modais de Criação/Edição e Exclusão
   const [searchParams, setSearchParams] = useSearchParams()
@@ -90,20 +101,36 @@ export default function ClientsPage() {
 
   const { toast } = useToast()
 
+  // Debounce da busca digitada para não sobrecarregar requisições
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search)
+      setCurrentPage(1)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
   const loadData = useCallback(async () => {
     try {
-      const [allClients, allCharges] = await Promise.all([
-        clientsService.getAll(),
+      const [clientsResp, allCharges] = await Promise.all([
+        clientsService.getList({
+          page: currentPage,
+          perPage: pageSize,
+          search: debouncedSearch,
+          sort: '-created',
+        }),
         chargesService.getAll(),
       ])
-      setClients(allClients)
+      setClients(clientsResp.items)
+      setTotalItems(clientsResp.totalItems)
+      setTotalPages(clientsResp.totalPages || 1)
       setCharges(allCharges)
     } catch (err) {
       console.error('Erro ao carregar clientes:', err)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [currentPage, pageSize, debouncedSearch])
 
   useEffect(() => {
     loadData()
@@ -364,21 +391,19 @@ export default function ClientsPage() {
         }
 
         // No modo day_by_day, cada iteração avança 1 dia com stepFlexSmartSync.
-        // O status retornado já traz a posição atualizada dia a dia.
+        // No modo single_date, o backend também executa via stepFlexSmartSync se estiver pending/running.
         let status: FlexSmartSyncStatus
-        if (
-          isDayByDayPolling &&
-          (activeSync.status === 'pending' || activeSync.status === 'running')
-        ) {
+        if (activeSync.status === 'pending' || activeSync.status === 'running') {
           try {
             await clientsService.stepFlexSmartSync(activeSync.id)
           } catch (stepErr) {
-            console.warn('[ClientsPage] Aviso ao acionar passo do dia:', stepErr)
+            console.warn('[ClientsPage] Aviso ao acionar passo da importação:', stepErr)
           }
           status = await clientsService.getFlexSmartSyncStatus(activeSync.id)
-          // Se completou pelo menos um dia ou finalizou, atualiza a lista de clientes na tabela
+          // Atualiza a lista na tabela durante a sincronização se houve avanço
           if (
             status.status === 'done' ||
+            (status.imported && status.imported > (activeSync.imported || 0)) ||
             (status.processedDays && status.processedDays > (activeSync.processedDays || 0))
           ) {
             loadData()
@@ -540,6 +565,8 @@ export default function ClientsPage() {
             ? `Carga dia a dia iniciada (${initialDateStr} → hoje). ${totalDays} dias serão verificados sequencialmente.`
             : `Buscando clientes alterados desde ${targetDate} em segundo plano. Clientes existentes serão atualizados.`,
         })
+        // Atualiza a primeira página para refletir novos clientes imediatamente
+        setCurrentPage(1)
       }
     } catch (err: unknown) {
       setSyncLoading(false)
@@ -564,26 +591,24 @@ export default function ClientsPage() {
     }
   }
 
-  // Filtro de busca por nome, email ou documento
-  const filteredClients = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return clients
-
-    return clients.filter((c) => {
-      const nameMatch = c.name?.toLowerCase().includes(q)
-      const emailMatch = c.email?.toLowerCase().includes(q)
-      const docMatch = c.document?.replace(/\D/g, '').includes(q.replace(/\D/g, ''))
-      const phoneMatch = c.phone?.replace(/\D/g, '').includes(q.replace(/\D/g, ''))
-      return nameMatch || emailMatch || docMatch || phoneMatch
-    })
-  }, [clients, search])
+  // A lista já é filtrada e paginada pelo servidor
+  const filteredClients = clients
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Clientes</h1>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Clientes</h1>
+            <Badge
+              variant="outline"
+              className="bg-slate-100 text-slate-700 border-slate-300 text-xs px-2 py-0.5 font-medium tabular-nums"
+              title="Total de clientes cadastrados na sua base"
+            >
+              {totalItems} {totalItems === 1 ? 'cliente' : 'clientes'}
+            </Badge>
+          </div>
           <p className="text-sm text-slate-500 mt-0.5">
             Gerencie sua carteira de clientes, dados cadastrais e histórico de cobranças
           </p>
@@ -1175,6 +1200,94 @@ export default function ClientsPage() {
                 </Card>
               )
             })}
+          </div>
+
+          {/* Paginação Desktop e Mobile */}
+          <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+            <div className="flex items-center gap-2">
+              <span>
+                Mostrando{' '}
+                <strong className="text-slate-900">
+                  {totalItems === 0 ? 0 : (currentPage - 1) * pageSize + 1}
+                </strong>{' '}
+                a{' '}
+                <strong className="text-slate-900">
+                  {Math.min(currentPage * pageSize, totalItems)}
+                </strong>{' '}
+                de <strong className="text-slate-900">{totalItems}</strong> clientes
+              </span>
+
+              <span className="text-slate-300">|</span>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500">Por página:</span>
+                <select
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value))
+                    setCurrentPage(1)
+                  }}
+                  className="border border-slate-200 rounded-md px-2 py-1 text-xs bg-white text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                  <option value={100}>100</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-1">
+              <span className="mr-2 text-slate-500">
+                Página <strong className="text-slate-900">{currentPage}</strong> de{' '}
+                <strong className="text-slate-900">{totalPages}</strong>
+              </span>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage <= 1 || loading}
+                className="w-8 h-8 text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-40"
+                title="Primeira página"
+              >
+                <ChevronsLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage <= 1 || loading}
+                className="w-8 h-8 text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-40"
+                title="Página anterior"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage >= totalPages || loading}
+                className="w-8 h-8 text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-40"
+                title="Próxima página"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage >= totalPages || loading}
+                className="w-8 h-8 text-slate-600 border-slate-200 hover:bg-slate-50 disabled:opacity-40"
+                title="Última página"
+              >
+                <ChevronsRight className="w-3.5 h-3.5" />
+              </Button>
+            </div>
           </div>
         </>
       )}

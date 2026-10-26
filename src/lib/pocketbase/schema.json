@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-26T18:27:19.323Z",
+  "generatedAt": "2026-10-26T18:48:18.027Z",
   "collections": [
     {
       "name": "users",
@@ -128,7 +128,11 @@
       "indexes": [
         "CREATE INDEX idx_clients_owner ON clients (owner)",
         "CREATE INDEX idx_clients_created ON clients (created)",
-        "CREATE INDEX `idx_clients_erp_code` ON `clients` (erp_code)"
+        "CREATE INDEX `idx_clients_erp_code` ON `clients` (erp_code)",
+        "CREATE INDEX `idx_clients_name` ON `clients` (name)",
+        "CREATE INDEX `idx_clients_document` ON `clients` (document)",
+        "CREATE INDEX `idx_clients_phone` ON `clients` (phone)",
+        "CREATE INDEX `idx_clients_email` ON `clients` (email)"
       ]
     },
     {

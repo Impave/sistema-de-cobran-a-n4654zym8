@@ -977,3 +977,121 @@ routerAdd('POST', '/backend/v1/flexsmart/sync', (e) => {
     message: 'Use a rota /backend/v1/flexsmart/start-sync para sincronização resiliente.',
   })
 })
+
+// --------------------------------------------------------------------------
+// 8. ROTA GET /backend/v1/shared/clients
+// Endpoint REST para disponibilizar lista de clientes para o projeto irmão "gestão de garantias impave"
+//
+// Autenticação suportada:
+// 1. Authorization: Bearer <PocketBase auth token> (qualquer usuário autenticado ou o service user garantias-service@impave.com.br)
+// 2. Header "X-Service-Key" ou "X-Api-Key" ou query param "apiKey" / "key" com a chave compartilhada: "impave-garantias-shared-key-2026"
+// --------------------------------------------------------------------------
+routerAdd('GET', '/backend/v1/shared/clients', (e) => {
+  const reqInfo = e.requestInfo()
+  const authUser = reqInfo.auth
+
+  // Validação de acesso por Token de Auth OU Chave de API de Serviço
+  const SHARED_SECRET_KEY = 'impave-garantias-shared-key-2026'
+
+  let reqApiKey = ''
+  try {
+    if (reqInfo && reqInfo.headers) {
+      reqApiKey =
+        reqInfo.headers['x-service-key'] ||
+        reqInfo.headers['x-api-key'] ||
+        reqInfo.headers['X-Service-Key'] ||
+        reqInfo.headers['X-Api-Key'] ||
+        ''
+    }
+  } catch (_) {}
+
+  if (!reqApiKey && reqInfo && reqInfo.query) {
+    reqApiKey = reqInfo.query.apiKey || reqInfo.query.key || ''
+  }
+
+  const isKeyAuthorized = Boolean(reqApiKey && reqApiKey === SHARED_SECRET_KEY)
+  const isAuthUserAuthorized = Boolean(authUser && authUser.id)
+
+  if (!isKeyAuthorized && !isAuthUserAuthorized) {
+    return e.json(401, {
+      success: false,
+      message:
+        'Não autorizado. Forneça o token de autenticação via header Authorization ou a chave de serviço via header X-Service-Key.',
+    })
+  }
+
+  // Parâmetros de paginação e busca
+  const query = (reqInfo && reqInfo.query) || {}
+  const page = parseInt(query.page, 10) > 0 ? parseInt(query.page, 10) : 1
+  let perPage = parseInt(query.perPage, 10)
+  if (isNaN(perPage) || perPage < 0) {
+    perPage = 50
+  } else if (perPage > 200) {
+    perPage = 200
+  }
+
+  const sort =
+    typeof query.sort === 'string' && query.sort.trim().length > 0 ? query.sort.trim() : 'name'
+  const search = typeof query.search === 'string' ? query.search.trim() : ''
+
+  // Montar filtro
+  let filter = "id != ''"
+  if (search) {
+    const escaped = search.replace(/'/g, "\\'")
+    filter =
+      filter +
+      " && (name ~ '" +
+      escaped +
+      "' || document ~ '" +
+      escaped +
+      "' || erp_code ~ '" +
+      escaped +
+      "' || email ~ '" +
+      escaped +
+      "')"
+  }
+
+  try {
+    const totalCount = $app.countRecords('clients', filter)
+
+    let limit = perPage === 0 ? 1000 : perPage
+    let offset = perPage === 0 ? 0 : (page - 1) * perPage
+
+    const records = $app.findRecordsByFilter('clients', filter, sort, limit, offset)
+
+    const items = []
+    for (let i = 0; i < records.length; i++) {
+      const r = records[i]
+      items.push({
+        id: r.id,
+        name: r.getString('name'),
+        document: r.getString('document'),
+        email: r.getString('email'),
+        phone: r.getString('phone'),
+        address: r.getString('address'),
+        city: r.getString('city'),
+        state: r.getString('state'),
+        erp_code: r.getString('erp_code'),
+        created: r.getString('created'),
+        updated: r.getString('updated'),
+      })
+    }
+
+    const totalPages = perPage > 0 ? Math.ceil(totalCount / perPage) : 1
+
+    return e.json(200, {
+      success: true,
+      page: page,
+      perPage: perPage,
+      totalItems: totalCount,
+      totalPages: totalPages,
+      items: items,
+    })
+  } catch (err) {
+    console.log('[shared_clients] Erro ao consultar clientes:', String(err))
+    return e.json(500, {
+      success: false,
+      message: 'Erro interno ao consultar clientes compartilhados: ' + String(err),
+    })
+  }
+})

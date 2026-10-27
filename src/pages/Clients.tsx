@@ -655,135 +655,141 @@ export default function ClientsPage() {
         <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
           {/* Botão de importação manual do ERP FlexSmart (visível para administradores) */}
           {user?.role === 'admin' && (
-            <div className="inline-flex rounded-lg shadow-xs">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => handleSyncFlexSmart()}
-                disabled={
-                  syncLoading ||
-                  loading ||
-                  cancellingSync ||
-                  activeSync?.status === 'running' ||
-                  activeSync?.status === 'pending' ||
-                  activeSync?.status === 'cancelling'
-                }
-                className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium rounded-r-none"
-                title={
-                  activeSync?.yesterdayDate
-                    ? `Buscar clientes alterados desde ${activeSync.yesterdayDate} no ERP FlexSmart`
-                    : 'Buscar clientes alterados a partir da data de ontem no ERP FlexSmart'
-                }
-              >
-                {cancellingSync || activeSync?.status === 'cancelling' ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-amber-600" />
-                    Interrompendo...
-                  </>
-                ) : syncLoading ||
-                  activeSync?.status === 'running' ||
-                  activeSync?.status === 'pending' ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
-                    Importando do ERP...
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-4 h-4 mr-1.5 text-indigo-600" />
-                    <span>Importar do ERP FlexSmart</span>
-                    {activeSync?.yesterdayDate && (
-                      <span className="hidden md:inline ml-1 text-xs text-slate-400 font-normal">
-                        (desde {activeSync.yesterdayDate})
-                      </span>
-                    )}
-                  </>
-                )}
-              </Button>
+            <div className="flex flex-col items-end gap-1">
+              <div className="inline-flex rounded-lg shadow-xs">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => handleSyncFlexSmart()}
+                  disabled={
+                    syncLoading ||
+                    loading ||
+                    cancellingSync ||
+                    activeSync?.status === 'running' ||
+                    activeSync?.status === 'pending' ||
+                    activeSync?.status === 'cancelling'
+                  }
+                  className="border-slate-300 text-slate-700 hover:bg-slate-50 font-medium rounded-r-none"
+                  title={
+                    activeSync?.yesterdayDate
+                      ? `Buscar clientes alterados desde ${activeSync.yesterdayDate} no ERP FlexSmart`
+                      : 'Buscar clientes alterados a partir da data de ontem no ERP FlexSmart'
+                  }
+                >
+                  {cancellingSync || activeSync?.status === 'cancelling' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-amber-600" />
+                      Interrompendo...
+                    </>
+                  ) : syncLoading ||
+                    activeSync?.status === 'running' ||
+                    activeSync?.status === 'pending' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-1.5 animate-spin text-indigo-600" />
+                      Importando do ERP...
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-1.5 text-indigo-600" />
+                      <span>Importar do ERP FlexSmart</span>
+                      {activeSync?.yesterdayDate && (
+                        <span className="hidden md:inline ml-1 text-xs text-slate-400 font-normal">
+                          (desde {activeSync.yesterdayDate})
+                        </span>
+                      )}
+                    </>
+                  )}
+                </Button>
 
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon"
-                    disabled={
-                      syncLoading ||
-                      loading ||
-                      cancellingSync ||
-                      activeSync?.status === 'running' ||
-                      activeSync?.status === 'pending' ||
-                      activeSync?.status === 'cancelling'
-                    }
-                    className="border-l-0 border-slate-300 text-slate-700 hover:bg-slate-50 rounded-l-none px-2"
-                    title="Opções de busca no ERP"
-                  >
-                    <ChevronDown className="w-4 h-4 text-slate-500" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-72">
-                  <DropdownMenuLabel className="text-xs text-slate-500 font-medium">
-                    Filtro de busca por data
-                  </DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => handleSyncFlexSmart()}
-                    className="cursor-pointer text-xs py-2"
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium text-slate-800 flex items-center gap-1.5">
-                        <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
-                        Buscar desde ontem (Padrão)
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      disabled={
+                        syncLoading ||
+                        loading ||
+                        cancellingSync ||
+                        activeSync?.status === 'running' ||
+                        activeSync?.status === 'pending' ||
+                        activeSync?.status === 'cancelling'
+                      }
+                      className="border-l-0 border-slate-300 text-slate-700 hover:bg-slate-50 rounded-l-none px-2"
+                      title="Opções de busca no ERP"
+                    >
+                      <ChevronDown className="w-4 h-4 text-slate-500" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-72">
+                    <DropdownMenuLabel className="text-xs text-slate-500 font-medium">
+                      Filtro de busca por data
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => handleSyncFlexSmart()}
+                      className="cursor-pointer text-xs py-2"
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium text-slate-800 flex items-center gap-1.5">
+                          <RefreshCw className="w-3.5 h-3.5 text-indigo-600" />
+                          Buscar desde ontem (Padrão)
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {activeSync?.yesterdayDate
+                            ? `Clientes alterados a partir de ${activeSync.yesterdayDate}`
+                            : 'Busca clientes alterados a partir do dia anterior'}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => handleSyncFlexSmart({ date: activeSync?.todayDate })}
+                      className="cursor-pointer text-xs py-2 text-indigo-950"
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-medium text-indigo-600 flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5" />
+                          Buscar pela data de hoje
+                        </span>
+                        <span className="text-[11px] text-slate-500">
+                          {activeSync?.todayDate
+                            ? `Clientes alterados a partir de hoje (${activeSync.todayDate})`
+                            : 'Busca apenas clientes alterados no dia corrente'}
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => setIsDatePickerDialogOpen(true)}
+                      className="cursor-pointer text-xs py-2 bg-indigo-50/50 hover:bg-indigo-50"
+                    >
+                      <div className="flex flex-col gap-0.5">
+                        <span className="font-semibold text-indigo-700 flex items-center gap-1.5">
+                          <Database className="w-3.5 h-3.5 text-indigo-600" />
+                          Carga dia a dia (selecionar data inicial...)
+                        </span>
+                        <span className="text-[11px] text-slate-600">
+                          Escolha a data inicial e execute a carga dia a dia até hoje.
+                        </span>
+                      </div>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() =>
+                        handleSyncFlexSmart({ mode: 'day_by_day', startDate: '01/09/2026' })
+                      }
+                      className="cursor-pointer text-xs py-1.5 text-slate-600 hover:text-slate-900"
+                    >
+                      <span className="text-[11px] text-slate-500 pl-5">
+                        Ou iniciar direto desde 01/09/2026 → hoje
                       </span>
-                      <span className="text-[11px] text-slate-500">
-                        {activeSync?.yesterdayDate
-                          ? `Clientes alterados a partir de ${activeSync.yesterdayDate}`
-                          : 'Busca clientes alterados a partir do dia anterior'}
-                      </span>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() => handleSyncFlexSmart({ date: activeSync?.todayDate })}
-                    className="cursor-pointer text-xs py-2 text-indigo-950"
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-medium text-indigo-600 flex items-center gap-1.5">
-                        <Calendar className="w-3.5 h-3.5" />
-                        Buscar pela data de hoje
-                      </span>
-                      <span className="text-[11px] text-slate-500">
-                        {activeSync?.todayDate
-                          ? `Clientes alterados a partir de hoje (${activeSync.todayDate})`
-                          : 'Busca apenas clientes alterados no dia corrente'}
-                      </span>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onClick={() => setIsDatePickerDialogOpen(true)}
-                    className="cursor-pointer text-xs py-2 bg-indigo-50/50 hover:bg-indigo-50"
-                  >
-                    <div className="flex flex-col gap-0.5">
-                      <span className="font-semibold text-indigo-700 flex items-center gap-1.5">
-                        <Database className="w-3.5 h-3.5 text-indigo-600" />
-                        Carga dia a dia (selecionar data inicial...)
-                      </span>
-                      <span className="text-[11px] text-slate-600">
-                        Escolha a data inicial e execute a carga dia a dia até hoje.
-                      </span>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onClick={() =>
-                      handleSyncFlexSmart({ mode: 'day_by_day', startDate: '01/09/2026' })
-                    }
-                    className="cursor-pointer text-xs py-1.5 text-slate-600 hover:text-slate-900"
-                  >
-                    <span className="text-[11px] text-slate-500 pl-5">
-                      Ou iniciar direto desde 01/09/2026 → hoje
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+              <span className="text-[11px] text-slate-400 font-normal pr-1 flex items-center gap-1">
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                Sincronização automática: 9h às 19h (seg a sex)
+              </span>
             </div>
           )}
 

@@ -1201,3 +1201,519 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
     })
   }
 })
+
+// --------------------------------------------------------------------------
+// 9. CRON AGENDADO: flexsmart_hourly_sync
+//
+// FUSO HORÁRIO E REGRAS DE EXECUÇÃO:
+// O servidor PocketBase roda em UTC (verificado via logs do sistema).
+// No Brasil (Horário de Brasília / America/Sao_Paulo), o fuso é UTC-3 (sem horário de verão).
+//
+// Janela solicitada: 09:00 às 19:00 de segunda a sexta-feira (Horário de Brasília).
+// Em UTC correspondente:
+//   09:00 BRT = 12:00 UTC
+//   19:00 BRT = 22:00 UTC
+//
+// Configuração da expressão cron:
+//   "0 12-22 * * 1-5" (minuto 0, horas 12 a 22 UTC, segunda a sexta)
+//
+// SEGURANÇA E GUARDRAILS ADICIONAIS:
+// Mesmo com a expressão cron configurada, o callback revalida explicitamente:
+// 1. O dia da semana no fuso de Brasília (UTC-3): deve ser 1 (segunda) até 5 (sexta).
+// 2. A hora corrente no fuso de Brasília (UTC-3): deve estar entre 9 e 19 inclusive.
+// 3. Se houver importação manual ou outro job em andamento (status pending/running/cancelling),
+//    o job agendado pula a execução sem travar nem concorrer.
+// 4. Executa a importação DO DIA corrente via GET /Cliente/getByDtAtz?data=DD/MM/AAAA.
+// 5. Registra o resultado detalhado em flex_sync (auditado) e emite logs no servidor.
+// --------------------------------------------------------------------------
+cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
+  // ATENÇÃO: Todas as funções auxiliares são declaradas INLINE para compatibilidade
+  // com a JSVM isolada do PocketBase.
+
+  const pad2 = (n) => (n < 10 ? '0' + n : '' + n)
+
+  const cleanDigits = (v) => {
+    if (!v) return ''
+    return String(v).replace(/\D/g, '')
+  }
+
+  const isValidEmail = (em) => {
+    if (!em || typeof em !== 'string') return false
+    const trimmed = em.trim()
+    if (trimmed.length < 5 || trimmed.length > 254) return false
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    return re.test(trimmed)
+  }
+
+  const delayMs = (ms) => {
+    try {
+      if (typeof sleep === 'function') {
+        sleep(ms)
+        return
+      }
+    } catch (_) {}
+    const start = Date.now()
+    while (Date.now() - start < ms) {}
+  }
+
+  // 1. Calcular data e hora local no fuso de Brasília (UTC - 3h)
+  const now = new Date()
+  const brtOffsetMs = 3 * 60 * 60 * 1000 // 3 horas a menos que UTC
+  const brtTime = new Date(now.getTime() - brtOffsetMs)
+
+  const brtDayOfWeek = brtTime.getUTCDay() // 0 = Domingo, 1 = Segunda, ..., 5 = Sexta, 6 = Sábado
+  const brtHour = brtTime.getUTCHours() // 0 a 23
+  const brtMinute = brtTime.getUTCMinutes()
+
+  const dayDateStr =
+    pad2(brtTime.getUTCDate()) +
+    '/' +
+    pad2(brtTime.getUTCMonth() + 1) +
+    '/' +
+    brtTime.getUTCFullYear()
+
+  console.log(
+    '[FlexSmart Cron] Disparo recebido: Horário Brasília ' +
+      dayDateStr +
+      ' ' +
+      pad2(brtHour) +
+      ':' +
+      pad2(brtMinute) +
+      ' (Dia semana: ' +
+      brtDayOfWeek +
+      ', UTC: ' +
+      now.toISOString() +
+      ')',
+  )
+
+  // 2. Validação estrita: Apenas segunda (1) a sexta (5), das 9h às 19h (inclusive)
+  if (brtDayOfWeek < 1 || brtDayOfWeek > 5) {
+    console.log(
+      '[FlexSmart Cron] Ignorando execução: fora do intervalo seg-sex (dia ' + brtDayOfWeek + ').',
+    )
+    return
+  }
+
+  if (brtHour < 9 || brtHour > 19) {
+    console.log(
+      '[FlexSmart Cron] Ignorando execução: fora do horário de trabalho das 9h às 19h (hora ' +
+        brtHour +
+        'h BRT).',
+    )
+    return
+  }
+
+  // 3. Localizar o usuário proprietário da integração (admin principal daniel@impave.com.br ou primeiro admin ativo)
+  let ownerId = ''
+  try {
+    const adminUser = $app.findAuthRecordByEmail('_pb_users_auth_', 'daniel@impave.com.br')
+    ownerId = adminUser.id
+  } catch (_) {
+    try {
+      const anyAdmin = $app.findFirstRecordByFilter(
+        'users',
+        "role = 'admin' && active = true",
+        'created',
+      )
+      ownerId = anyAdmin.id
+    } catch (_) {
+      try {
+        const firstUser = $app.findFirstRecordByFilter('users', "id != ''", 'created')
+        ownerId = firstUser.id
+      } catch (_) {}
+    }
+  }
+
+  if (!ownerId) {
+    console.log('[FlexSmart Cron] ERRO: Nenhum usuário encontrado para associar a sincronização.')
+    return
+  }
+
+  // 4. Verificar se já existe sincronização ativa em andamento (manual ou outro processo)
+  try {
+    const activeJobs = $app.findRecordsByFilter(
+      'flex_sync',
+      "status = 'running' || status = 'pending' || status = 'cancelling'",
+      '-created',
+      10,
+      0,
+    )
+    if (activeJobs && activeJobs.length > 0) {
+      console.log(
+        '[FlexSmart Cron] Existe(m) ' +
+          activeJobs.length +
+          ' importação(ões) em andamento. Pulando execução desta hora para evitar concorrência.',
+      )
+      return
+    }
+  } catch (checkErr) {
+    console.log('[FlexSmart Cron] Aviso ao verificar jobs ativos:', String(checkErr))
+  }
+
+  // 5. Criar registro de auditoria em flex_sync
+  let syncRecord = null
+  try {
+    const collection = $app.findCollectionByNameOrId('flex_sync')
+    syncRecord = new Record(collection)
+    syncRecord.set('owner', ownerId)
+    syncRecord.set('status', 'running')
+    syncRecord.set('started_at', new Date().toISOString())
+    syncRecord.set('count', 0)
+    syncRecord.set('imported', 0)
+    syncRecord.set('created_count', 0)
+    syncRecord.set('updated_count', 0)
+    syncRecord.set('sync_mode', 'single_date')
+    syncRecord.set('is_full_sync', false)
+    syncRecord.set('sync_start_date', dayDateStr)
+    syncRecord.set('sync_date', dayDateStr)
+    syncRecord.set('total_days', 1)
+    syncRecord.set('processed_days', 0)
+    syncRecord.set('current_day_date', dayDateStr)
+    syncRecord.set(
+      'current_step',
+      'Importação automática agendada (' +
+        dayDateStr +
+        ' ' +
+        pad2(brtHour) +
+        ':00 BRT): autenticando no ERP...',
+    )
+    $app.save(syncRecord)
+  } catch (createErr) {
+    console.log(
+      '[FlexSmart Cron] Erro ao criar registro de auditoria flex_sync:',
+      String(createErr),
+    )
+    return
+  }
+
+  // 6. Realizar Login no ERP FlexSmart com até 3 retentativas (5s / 10s)
+  const username =
+    $os.getenv('FLEXSMART_USERNAME') ||
+    ($secrets.has('FLEXSMART_USERNAME') ? $secrets.get('FLEXSMART_USERNAME') : '') ||
+    'JACSON'
+  const password =
+    $os.getenv('FLEXSMART_PASSWORD') ||
+    ($secrets.has('FLEXSMART_PASSWORD') ? $secrets.get('FLEXSMART_PASSWORD') : '') ||
+    'sc@p1neL'
+  const rawBase =
+    $os.getenv('FLEXSMART_BASE_URL') ||
+    ($secrets.has('FLEXSMART_BASE_URL') ? $secrets.get('FLEXSMART_BASE_URL') : '') ||
+    'https://api.impave.com.br:8443'
+  const base = rawBase.replace(/\/+$/, '')
+
+  let token = ''
+  let lastLoginError = ''
+  const maxLoginAttempts = 3
+  const loginWaitTimesMs = [5000, 10000]
+
+  for (let attempt = 1; attempt <= maxLoginAttempts; attempt++) {
+    try {
+      console.log(
+        '[FlexSmart Cron] Tentativa ' +
+          attempt +
+          '/' +
+          maxLoginAttempts +
+          ' de login no ERP FlexSmart (timeout 120s)...',
+      )
+      const loginRes = $http.send({
+        url: base + '/login?Content-Type=application/json',
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: username, password: password }),
+        timeout: 120,
+      })
+
+      if (loginRes.statusCode !== 200) {
+        lastLoginError = 'HTTP ' + loginRes.statusCode + (loginRes.raw ? ': ' + loginRes.raw : '')
+        console.log('[FlexSmart Cron] Resposta de login diferente de 200: ' + lastLoginError)
+        if (
+          loginRes.statusCode === 401 ||
+          loginRes.statusCode === 400 ||
+          loginRes.statusCode === 403
+        ) {
+          break
+        }
+      } else {
+        let pj = loginRes.json
+        if (!pj && loginRes.raw) {
+          try {
+            pj = JSON.parse(loginRes.raw)
+          } catch (_) {}
+        }
+        if (pj && pj.access_token) {
+          token = pj.access_token
+          break
+        } else {
+          lastLoginError = 'Resposta 200 sem access_token válido'
+        }
+      }
+    } catch (loginErr) {
+      lastLoginError = String(loginErr)
+      console.log(
+        '[FlexSmart Cron] Falha na tentativa ' + attempt + ' de login no ERP:',
+        lastLoginError,
+      )
+    }
+
+    if (!token && attempt < maxLoginAttempts) {
+      const waitTime = loginWaitTimesMs[attempt - 1] || 5000
+      delayMs(waitTime)
+    }
+  }
+
+  if (!token) {
+    const errorMsg =
+      'Falha na autenticação do ERP FlexSmart após ' +
+      maxLoginAttempts +
+      ' tentativas: ' +
+      lastLoginError
+    console.log('[FlexSmart Cron] ' + errorMsg)
+    try {
+      syncRecord.set('status', 'error')
+      syncRecord.set('error', errorMsg)
+      syncRecord.set('finished_at', new Date().toISOString())
+      syncRecord.set('current_step', 'Erro na autenticação automática do ERP.')
+      $app.save(syncRecord)
+    } catch (_) {}
+    return
+  }
+
+  // 7. Buscar clientes alterados no DIA corrente
+  let erpItems = []
+  try {
+    console.log(
+      '[FlexSmart Cron] Buscando clientes alterados na data ' +
+        dayDateStr +
+        ' via GET /Cliente/getByDtAtz...',
+    )
+    const fetchRes = $http.send({
+      url: base + '/Cliente/getByDtAtz?data=' + encodeURIComponent(dayDateStr),
+      method: 'GET',
+      headers: {
+        AuthToken: token,
+        Accept: 'application/json',
+      },
+      timeout: 120,
+    })
+
+    if (Array.isArray(fetchRes.json)) {
+      erpItems = fetchRes.json
+    } else if (fetchRes.raw) {
+      try {
+        const parsed = JSON.parse(fetchRes.raw)
+        if (Array.isArray(parsed)) erpItems = parsed
+      } catch (_) {}
+    }
+  } catch (fetchErr) {
+    const errorMsg = 'Erro na requisição ao ERP FlexSmart (getByDtAtz): ' + String(fetchErr)
+    console.log('[FlexSmart Cron] ' + errorMsg)
+    try {
+      syncRecord.set('status', 'error')
+      syncRecord.set('error', errorMsg)
+      syncRecord.set('finished_at', new Date().toISOString())
+      syncRecord.set('current_step', 'Falha na busca dos dados do dia no ERP.')
+      $app.save(syncRecord)
+    } catch (_) {}
+    return
+  }
+
+  console.log(
+    '[FlexSmart Cron] Clientes retornados pelo ERP para ' + dayDateStr + ': ' + erpItems.length,
+  )
+
+  // 8. Aplicar Upsert idêntico ao processo manual nos campos reconstruídos
+  let createdCount = 0
+  let updatedCount = 0
+
+  for (let i = 0; i < erpItems.length; i++) {
+    const item = erpItems[i]
+    if (!item) continue
+
+    const codCliente =
+      item.cdCliente !== undefined && item.cdCliente !== null ? String(item.cdCliente).trim() : ''
+    const rawName = item.nmCliente || item.nmFantasia || item.nome || ''
+    const nomeCliente = String(rawName).trim()
+    if (!nomeCliente || nomeCliente.length < 2) continue
+
+    const rawRazaoSocial = item.razaoSocial || item.nmRazaoSocial || item.nmCliente || ''
+    const razaoSocial = String(rawRazaoSocial).trim()
+
+    const rawDoc = item.cnpjCpf || item.nuCpfCnpj || item.cpfCnpj || item.documento || ''
+    const cleanDoc = cleanDigits(rawDoc)
+
+    const rawEmail1 = item.email || item.nmEmail || item.dsEmail || ''
+    const email1 = isValidEmail(rawEmail1) ? String(rawEmail1).trim().toLowerCase() : ''
+    const email2 = isValidEmail(item.email2) ? String(item.email2).trim().toLowerCase() : ''
+    const email3 = isValidEmail(item.email3) ? String(item.email3).trim().toLowerCase() : ''
+
+    const rawContato1 = item.celular || item.fone || item.telefone || item.nuTelefone || ''
+    const contato1 = cleanDigits(rawContato1)
+    const rawContato2 = item.contato2 || item.telefone2 || item.fone2 || ''
+    const contato2 = cleanDigits(rawContato2)
+
+    const bairro = String(item.bairro || item.nmBairro || '').trim()
+    const cidade = String(
+      item.cidade && item.cidade.nmCidade
+        ? item.cidade.nmCidade
+        : item.cidade || item.nmCidade || '',
+    ).trim()
+    const estado = String(
+      item.cidade && item.cidade.uf ? item.cidade.uf : item.uf || item.estado || '',
+    ).trim()
+
+    // Localizar cliente existente por:
+    // 1. cod_cliente
+    // 2. ou cnpj_cpf
+    // 3. ou nome_cliente idêntico
+    let existingClient = null
+
+    if (codCliente) {
+      try {
+        existingClient = $app.findFirstRecordByFilter(
+          'clients',
+          "cod_cliente = '" + codCliente + "'",
+        )
+      } catch (_) {}
+    }
+
+    if (!existingClient && cleanDoc) {
+      try {
+        existingClient = $app.findFirstRecordByFilter('clients', "cnpj_cpf = '" + cleanDoc + "'")
+      } catch (_) {}
+    }
+
+    if (!existingClient && nomeCliente) {
+      try {
+        const safeName = nomeCliente.replace(/'/g, "\\'")
+        existingClient = $app.findFirstRecordByFilter(
+          'clients',
+          "nome_cliente = '" + safeName + "'",
+        )
+      } catch (_) {}
+    }
+
+    try {
+      if (existingClient) {
+        let changed = false
+        if (codCliente && existingClient.getString('cod_cliente') !== codCliente) {
+          existingClient.set('cod_cliente', codCliente)
+          changed = true
+        }
+        if (nomeCliente && existingClient.getString('nome_cliente') !== nomeCliente) {
+          existingClient.set('nome_cliente', nomeCliente)
+          changed = true
+        }
+        if (razaoSocial && existingClient.getString('razao_social') !== razaoSocial) {
+          existingClient.set('razao_social', razaoSocial)
+          changed = true
+        }
+        if (cleanDoc && existingClient.getString('cnpj_cpf') !== cleanDoc) {
+          existingClient.set('cnpj_cpf', cleanDoc)
+          changed = true
+        }
+        if (contato1 && existingClient.getString('contato1') !== contato1) {
+          existingClient.set('contato1', contato1)
+          changed = true
+        }
+        if (contato2 && existingClient.getString('contato2') !== contato2) {
+          existingClient.set('contato2', contato2)
+          changed = true
+        }
+        if (email1 && existingClient.getString('email1') !== email1) {
+          existingClient.set('email1', email1)
+          changed = true
+        }
+        if (email2 && existingClient.getString('email2') !== email2) {
+          existingClient.set('email2', email2)
+          changed = true
+        }
+        if (email3 && existingClient.getString('email3') !== email3) {
+          existingClient.set('email3', email3)
+          changed = true
+        }
+        if (bairro && existingClient.getString('bairro') !== bairro) {
+          existingClient.set('bairro', bairro)
+          changed = true
+        }
+        if (cidade && existingClient.getString('cidade') !== cidade) {
+          existingClient.set('cidade', cidade)
+          changed = true
+        }
+        if (estado && existingClient.getString('estado') !== estado) {
+          existingClient.set('estado', estado)
+          changed = true
+        }
+        if (changed) {
+          $app.save(existingClient)
+        }
+        updatedCount++
+      } else {
+        const clientsCol = $app.findCollectionByNameOrId('clients')
+        const newClient = new Record(clientsCol)
+        newClient.set('owner', ownerId)
+        newClient.set('nome_cliente', nomeCliente)
+        if (codCliente) newClient.set('cod_cliente', codCliente)
+        if (razaoSocial) newClient.set('razao_social', razaoSocial)
+        if (cleanDoc) newClient.set('cnpj_cpf', cleanDoc)
+        if (contato1) newClient.set('contato1', contato1)
+        if (contato2) newClient.set('contato2', contato2)
+        if (email1) newClient.set('email1', email1)
+        if (email2) newClient.set('email2', email2)
+        if (email3) newClient.set('email3', email3)
+        if (bairro) newClient.set('bairro', bairro)
+        if (cidade) newClient.set('cidade', cidade)
+        if (estado) newClient.set('estado', estado)
+        $app.save(newClient)
+        createdCount++
+      }
+    } catch (saveErr) {
+      console.log(
+        '[FlexSmart Cron] Erro ao gravar cliente ' + nomeCliente + ' (cod: ' + codCliente + '):',
+        String(saveErr),
+      )
+    }
+  }
+
+  // 9. Atualizar registro de auditoria flex_sync como concluído com sucesso
+  try {
+    const totalProcessed = createdCount + updatedCount
+    syncRecord.set('count', erpItems.length)
+    syncRecord.set('imported', totalProcessed)
+    syncRecord.set('created_count', createdCount)
+    syncRecord.set('updated_count', updatedCount)
+    syncRecord.set('processed_days', 1)
+    syncRecord.set('status', 'done')
+    syncRecord.set('finished_at', new Date().toISOString())
+    syncRecord.set(
+      'current_step',
+      'Importação automática concluída com sucesso: ' +
+        createdCount +
+        ' novos, ' +
+        updatedCount +
+        ' atualizados (' +
+        erpItems.length +
+        ' no ERP no dia ' +
+        dayDateStr +
+        ').',
+    )
+    if (erpItems.length > 0) {
+      try {
+        syncRecord.set('sample', erpItems[0])
+      } catch (_) {}
+    }
+    $app.save(syncRecord)
+  } catch (auditErr) {
+    console.log('[FlexSmart Cron] Erro ao finalizar auditoria flex_sync:', String(auditErr))
+  }
+
+  console.log(
+    '[FlexSmart Cron] Job horário finalizado com sucesso! Data: ' +
+      dayDateStr +
+      ' | Total ERP: ' +
+      erpItems.length +
+      ' | Criados: ' +
+      createdCount +
+      ' | Atualizados: ' +
+      updatedCount,
+  )
+})

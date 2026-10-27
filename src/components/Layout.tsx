@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   Users,
   Receipt,
+  FileText,
   Settings,
   UserCog,
   LogOut,
@@ -21,6 +22,7 @@ const navItems = [
   { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
   { name: 'Clientes', path: '/clients', icon: Users },
   { name: 'Cobranças', path: '/charges', icon: Receipt },
+  { name: 'Títulos', path: '/titles', icon: FileText },
   { name: 'Configurações', path: '/settings', icon: Settings },
   { name: 'Usuários', path: '/users', icon: UserCog, adminOnly: true },
 ]

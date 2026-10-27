@@ -150,3 +150,51 @@ export interface ChargeFormData {
   due_date: string
   status: ChargeStatus
 }
+
+export interface TitleRecord {
+  id: string
+  menu?: boolean
+  filial?: string
+  conta?: string
+  cliente_fornecedor?: string
+  numero?: string
+  parcela?: string
+  emissao?: string
+  vencimento?: string
+  pagamento?: string
+  atraso?: number
+  valor_nominal?: number
+  saldo_atual?: number
+  juros_pago?: number
+  juros_previsto?: number
+  saldo_juros?: number
+  multa?: number
+  saldo_juros_multa?: number
+  desconto?: number
+  forma_pagamento?: string
+  bordero?: number
+  nosso_numero?: number
+  nosso_numero_formatado?: string
+  modelo_dcto?: string
+  portador?: string
+  serie?: string
+  impresso?: string
+  vendedor?: string
+  hora_impressao_boleto?: string
+  observacao?: string
+  condicao_pgto?: string
+  outras_despesas?: number
+  situacao?: string
+  dt_reparcelamento?: string
+  dt_acerto?: string
+  created: string
+  updated: string
+}
+
+export interface TitlesPaginatedResponse {
+  items: TitleRecord[]
+  page: number
+  perPage: number
+  totalItems: number
+  totalPages: number
+}

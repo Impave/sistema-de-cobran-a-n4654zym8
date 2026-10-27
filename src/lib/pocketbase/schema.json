@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-27T12:30:04.968Z",
+  "generatedAt": "2026-10-27T13:34:50.401Z",
   "collections": [
     {
       "name": "users",
@@ -404,6 +404,244 @@
       "indexes": [
         "CREATE INDEX idx_flex_sync_owner ON flex_sync (owner)",
         "CREATE INDEX idx_flex_sync_status ON flex_sync (status)"
+      ]
+    },
+    {
+      "name": "titles",
+      "type": "base",
+      "apiRules": {
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
+        "create": "@request.auth.id != ''",
+        "update": "@request.auth.id != ''",
+        "delete": "@request.auth.id != ''"
+      },
+      "fields": [
+        {
+          "name": "menu",
+          "type": "bool",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "filial",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "conta",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cliente_fornecedor",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "numero",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "parcela",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "emissao",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "vencimento",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "pagamento",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "atraso",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "valor_nominal",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "saldo_atual",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "juros_pago",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "juros_previsto",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "saldo_juros",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "multa",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "saldo_juros_multa",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "desconto",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "forma_pagamento",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "bordero",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "nosso_numero",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "nosso_numero_formatado",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "modelo_dcto",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "portador",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "serie",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "impresso",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "vendedor",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "hora_impressao_boleto",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "observacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "condicao_pgto",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "outras_despesas",
+          "type": "number",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "situacao",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "dt_reparcelamento",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "dt_acerto",
+          "type": "date",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "created",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate"]
+        },
+        {
+          "name": "updated",
+          "type": "autodate",
+          "required": false,
+          "system": false,
+          "autodateTriggers": ["onCreate", "onUpdate"]
+        }
+      ],
+      "indexes": [
+        "CREATE INDEX idx_titles_numero ON titles (numero)",
+        "CREATE INDEX idx_titles_cliente_fornecedor ON titles (cliente_fornecedor)",
+        "CREATE INDEX idx_titles_vencimento ON titles (vencimento)",
+        "CREATE INDEX idx_titles_situacao ON titles (situacao)",
+        "CREATE INDEX idx_titles_nosso_numero_formatado ON titles (nosso_numero_formatado)"
       ]
     }
   ]

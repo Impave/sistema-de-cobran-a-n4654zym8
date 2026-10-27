@@ -9,6 +9,7 @@ import Layout from '@/components/Layout'
 import Index from '@/pages/Index'
 import ClientsPage from '@/pages/Clients'
 import ChargesPage from '@/pages/Charges'
+import TitlesPage from '@/pages/Titles'
 import SettingsPage from '@/pages/Settings'
 import UsersPage from '@/pages/Users'
 import Login from '@/pages/Login'
@@ -65,6 +66,7 @@ const App = () => (
             <Route path="/dashboard" element={<Index />} />
             <Route path="/clients" element={<ClientsPage />} />
             <Route path="/charges" element={<ChargesPage />} />
+            <Route path="/titles" element={<TitlesPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route
               path="/users"

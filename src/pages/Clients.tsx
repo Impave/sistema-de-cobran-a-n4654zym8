@@ -268,29 +268,34 @@ export default function ClientsPage() {
     e.preventDefault()
     setFormError(null)
 
-    const finalName = (formData.nome_cliente || '').trim()
-    if (!finalName || finalName.length < 2) {
-      setFormError('O nome do cliente é obrigatório e deve ter no mínimo 2 caracteres.')
+    const cleanDoc = (formData.cnpj_cpf || '').replace(/\D/g, '')
+    if (!cleanDoc) {
+      setFormError('Informe o CPF/CNPJ.')
       return
     }
+
+    const finalName = (formData.nome_cliente || '').trim()
+    const displayName =
+      finalName || (formData.razao_social || '').trim() || formData.cnpj_cpf || 'Cliente'
 
     setFormLoading(true)
     try {
       const payload: ClientFormData = {
         ...formData,
         nome_cliente: finalName,
+        cnpj_cpf: formData.cnpj_cpf,
       }
       if (editingClient) {
         await clientsService.update(editingClient.id, payload)
         toast({
           title: 'Cliente atualizado',
-          description: `Os dados de ${finalName} foram atualizados com sucesso.`,
+          description: `Os dados de ${displayName} foram atualizados com sucesso.`,
         })
       } else {
         await clientsService.create(payload)
         toast({
           title: 'Cliente cadastrado',
-          description: `${finalName} foi adicionado à sua base de clientes.`,
+          description: `${displayName} foi adicionado à sua base de clientes.`,
         })
       }
       handleCloseForm()
@@ -1456,15 +1461,14 @@ export default function ClientsPage() {
 
               <div className="sm:col-span-2">
                 <Label htmlFor="c-nome-cliente" className="text-xs font-semibold text-slate-700">
-                  Nome do cliente <span className="text-red-500">*</span>
+                  Nome do cliente
                 </Label>
                 <Input
                   id="c-nome-cliente"
-                  value={formData.nome_cliente}
+                  value={formData.nome_cliente || ''}
                   onChange={(e) => setFormData({ ...formData, nome_cliente: e.target.value })}
                   placeholder="Ex: Auto Peças Modelo Ltda"
                   className="mt-1 text-sm"
-                  required
                 />
               </div>
             </div>
@@ -1485,7 +1489,7 @@ export default function ClientsPage() {
 
               <div>
                 <Label htmlFor="c-cnpj-cpf" className="text-xs font-semibold text-slate-700">
-                  CPF / CNPJ
+                  CPF / CNPJ <span className="text-red-500">*</span>
                 </Label>
                 <Input
                   id="c-cnpj-cpf"
@@ -1495,6 +1499,7 @@ export default function ClientsPage() {
                   }
                   placeholder="00.000.000/0000-00 ou CPF"
                   className="mt-1 text-sm"
+                  required
                 />
               </div>
             </div>

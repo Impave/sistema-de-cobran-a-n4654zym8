@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-27T01:22:50.526Z",
+  "generatedAt": "2026-10-27T01:40:26.451Z",
   "collections": [
     {
       "name": "users",
@@ -98,7 +98,7 @@
         {
           "name": "nome_cliente",
           "type": "text",
-          "required": true,
+          "required": false,
           "system": false
         },
         {
@@ -110,7 +110,7 @@
         {
           "name": "cnpj_cpf",
           "type": "text",
-          "required": false,
+          "required": true,
           "system": false
         },
         {

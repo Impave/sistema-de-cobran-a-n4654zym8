@@ -94,6 +94,10 @@ export const clientsService = {
     if (!user) throw new Error('Usuário não autenticado')
 
     const cleanCnpjCpf = data.cnpj_cpf ? data.cnpj_cpf.replace(/\D/g, '') : ''
+    if (!cleanCnpjCpf) {
+      throw new Error('Informe o CPF/CNPJ')
+    }
+
     const cleanContato1 = data.contato1 ? data.contato1.replace(/\D/g, '') : ''
     const cleanContato2 = data.contato2 ? data.contato2.replace(/\D/g, '') : ''
     const cleanCodCliente = (data.cod_cliente || data.erp_code || '').trim()
@@ -103,7 +107,7 @@ export const clientsService = {
       cod_cliente: cleanCodCliente || '',
       nome_cliente: data.nome_cliente ? data.nome_cliente.trim() : '',
       razao_social: data.razao_social ? data.razao_social.trim() : '',
-      cnpj_cpf: cleanCnpjCpf || '',
+      cnpj_cpf: cleanCnpjCpf,
       contato1: cleanContato1 || '',
       contato2: cleanContato2 || '',
       email1: data.email1 ? data.email1.trim() : '',
@@ -118,7 +122,11 @@ export const clientsService = {
   async update(id: string, data: Partial<ClientFormData>): Promise<ClientRecord> {
     const payload = { ...data }
     if (payload.cnpj_cpf !== undefined) {
-      payload.cnpj_cpf = payload.cnpj_cpf ? payload.cnpj_cpf.replace(/\D/g, '') : ''
+      const cleanDoc = payload.cnpj_cpf ? payload.cnpj_cpf.replace(/\D/g, '') : ''
+      if (!cleanDoc) {
+        throw new Error('Informe o CPF/CNPJ')
+      }
+      payload.cnpj_cpf = cleanDoc
     }
     if (payload.contato1 !== undefined) {
       payload.contato1 = payload.contato1 ? payload.contato1.replace(/\D/g, '') : ''

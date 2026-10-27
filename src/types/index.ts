@@ -35,9 +35,9 @@ export interface ClientRecord {
   id: string
   owner: string
   cod_cliente?: string
-  nome_cliente: string
+  nome_cliente?: string
   razao_social?: string
-  cnpj_cpf?: string
+  cnpj_cpf: string
   contato1?: string
   contato2?: string
   email1?: string
@@ -128,9 +128,9 @@ export interface ChargeRecord {
 
 export interface ClientFormData {
   cod_cliente?: string
-  nome_cliente: string
+  nome_cliente?: string
   razao_social?: string
-  cnpj_cpf?: string
+  cnpj_cpf: string
   contato1?: string
   contato2?: string
   email1?: string

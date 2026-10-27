@@ -32,11 +32,13 @@ import {
   DialogDescription,
 } from '@/components/ui/dialog'
 import { ClientAvatar } from '@/components/ClientAvatar'
+import { FlexSmartSyncCard } from '@/components/FlexSmartSyncCard'
 import { clientsService } from '@/services/clients'
 import { chargesService } from '@/services/charges'
+import { flexSmartService } from '@/services/flexsmart'
 import { useRealtime } from '@/hooks/use-realtime'
 import { useToast } from '@/hooks/use-toast'
-import type { ClientRecord, ClientFormData, ChargeRecord } from '@/types'
+import type { ClientRecord, ClientFormData, ChargeRecord, FlexSmartSyncStatus } from '@/types'
 import { formatDocument, formatPhone } from '@/lib/formatters'
 
 export default function ClientsPage() {
@@ -51,6 +53,10 @@ export default function ClientsPage() {
   const [pageSize, setPageSize] = useState(25)
   const [totalItems, setTotalItems] = useState(0)
   const [totalPages, setTotalPages] = useState(1)
+
+  // Estado da última sincronização FlexSmart
+  const [lastSync, setLastSync] = useState<FlexSmartSyncStatus | null>(null)
+  const [syncLoading, setSyncLoading] = useState(false)
 
   // Modais de Criação/Edição e Exclusão
   const [searchParams, setSearchParams] = useSearchParams()
@@ -111,15 +117,41 @@ export default function ClientsPage() {
     }
   }, [currentPage, pageSize, debouncedSearch])
 
+  // Carrega status da última sincronização do FlexSmart
+  const loadLastSync = useCallback(async () => {
+    try {
+      setSyncLoading(true)
+      const status = await flexSmartService.getLastSync()
+      setLastSync(status)
+    } catch (err) {
+      console.warn('Erro ao carregar última sincronização FlexSmart:', err)
+    } finally {
+      setSyncLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadData()
-  }, [loadData])
+    loadLastSync()
+  }, [loadData, loadLastSync])
 
-  // Real-time
+  // Polling leve a cada 15 segundos para atualizar a sincronização horária e status em andamento
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadLastSync()
+    }, 15000)
+    return () => clearInterval(interval)
+  }, [loadLastSync])
+
+  // Real-time para clientes, cobranças e sincronizações do FlexSmart
   useRealtime('clients', () => {
     loadData()
   })
   useRealtime('charges', () => {
+    loadData()
+  })
+  useRealtime('flex_sync', () => {
+    loadLastSync()
     loadData()
   })
 
@@ -316,6 +348,8 @@ export default function ClientsPage() {
 
   return (
     <div className="space-y-6">
+      {/* Card da Última Sincronização FlexSmart (no topo da tela, antes de tudo) */}
+      <FlexSmartSyncCard lastSync={lastSync} loading={syncLoading} onRefresh={loadLastSync} />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

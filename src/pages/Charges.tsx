@@ -299,7 +299,7 @@ export default function ChargesPage() {
   const filteredCharges = useMemo(() => {
     return charges.filter((charge) => {
       const client = charge.expand?.client || clientMap.get(charge.client)
-      const clientName = client?.name?.toLowerCase() || ''
+      const clientName = (client?.nome_cliente || client?.razao_social || '').toLowerCase()
       const desc = charge.description?.toLowerCase() || ''
       const num = charge.number?.toLowerCase() || ''
       const q = search.trim().toLowerCase()
@@ -485,7 +485,7 @@ export default function ChargesPage() {
                 <tbody className="divide-y divide-slate-100">
                   {filteredCharges.map((charge, index) => {
                     const client = charge.expand?.client || clientMap.get(charge.client)
-                    const clientName = client?.name || 'Cliente'
+                    const clientName = client?.nome_cliente || client?.razao_social || 'Cliente'
                     const isOverdue = charge.status === 'overdue'
 
                     return (
@@ -578,7 +578,7 @@ export default function ChargesPage() {
           <div className="sm:hidden space-y-3">
             {filteredCharges.map((charge) => {
               const client = charge.expand?.client || clientMap.get(charge.client)
-              const clientName = client?.name || 'Cliente'
+              const clientName = client?.nome_cliente || client?.razao_social || 'Cliente'
               const isOverdue = charge.status === 'overdue'
 
               return (
@@ -719,7 +719,7 @@ export default function ChargesPage() {
                   <SelectContent>
                     {clients.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.name} {c.email ? `(${c.email})` : ''}
+                        {c.nome_cliente || c.razao_social} {c.cod_cliente ? `[#${c.cod_cliente}]` : ''} {c.email1 ? `(${c.email1})` : ''}
                       </SelectItem>
                     ))}
                   </SelectContent>

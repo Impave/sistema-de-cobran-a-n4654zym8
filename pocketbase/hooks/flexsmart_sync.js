@@ -496,39 +496,46 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
     const item = erpItems[i]
     if (!item) continue
 
-    const erpCode =
-      item.cdCliente !== undefined && item.cdCliente !== null ? String(item.cdCliente) : ''
-    const rawName = item.nmCliente || item.nmFantasia || item.razaoSocial || item.nome || ''
-    const name = String(rawName).trim()
-    if (!name || name.length < 2) continue
+    const codCliente =
+      item.cdCliente !== undefined && item.cdCliente !== null ? String(item.cdCliente).trim() : ''
+    const rawName = item.nmCliente || item.nmFantasia || item.nome || ''
+    const nomeCliente = String(rawName).trim()
+    if (!nomeCliente || nomeCliente.length < 2) continue
+
+    const rawRazaoSocial = item.razaoSocial || item.nmRazaoSocial || item.nmCliente || ''
+    const razaoSocial = String(rawRazaoSocial).trim()
 
     const rawDoc = item.cnpjCpf || item.nuCpfCnpj || item.cpfCnpj || item.documento || ''
     const cleanDoc = cleanDigits(rawDoc)
 
-    const rawEmail = item.email || item.nmEmail || item.dsEmail || ''
-    const validEmail = isValidEmail(rawEmail) ? String(rawEmail).trim().toLowerCase() : ''
+    const rawEmail1 = item.email || item.nmEmail || item.dsEmail || ''
+    const email1 = isValidEmail(rawEmail1) ? String(rawEmail1).trim().toLowerCase() : ''
+    const email2 = isValidEmail(item.email2) ? String(item.email2).trim().toLowerCase() : ''
+    const email3 = isValidEmail(item.email3) ? String(item.email3).trim().toLowerCase() : ''
 
-    const rawPhone = item.telefone || item.nuTelefone || item.celular || item.fone || ''
-    const cleanPhone = cleanDigits(rawPhone)
+    const rawContato1 = item.celular || item.fone || item.telefone || item.nuTelefone || ''
+    const contato1 = cleanDigits(rawContato1)
+    const rawContato2 = item.contato2 || item.telefone2 || item.fone2 || ''
+    const contato2 = cleanDigits(rawContato2)
 
-    const address = String(item.endereco || item.dsEndereco || item.logradouro || '').trim()
-    const city = String(
+    const bairro = String(item.bairro || item.nmBairro || '').trim()
+    const cidade = String(
       item.cidade && item.cidade.nmCidade
         ? item.cidade.nmCidade
         : item.cidade || item.nmCidade || '',
     ).trim()
-    const state = String(
+    const estado = String(
       item.cidade && item.cidade.uf ? item.cidade.uf : item.uf || item.estado || '',
     ).trim()
 
-    // Busca cliente existente por erp_code ou por documento ou por nome idêntico
+    // Busca cliente existente por cod_cliente ou por cnpj_cpf ou por nome_cliente idêntico
     let existingClient = null
 
-    if (erpCode) {
+    if (codCliente) {
       try {
         existingClient = $app.findFirstRecordByFilter(
           'clients',
-          `owner = '${authUser.id}' && erp_code = '${erpCode}'`,
+          `owner = '${authUser.id}' && cod_cliente = '${codCliente}'`,
         )
       } catch (_) {}
     }
@@ -537,17 +544,17 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
       try {
         existingClient = $app.findFirstRecordByFilter(
           'clients',
-          `owner = '${authUser.id}' && document = '${cleanDoc}'`,
+          `owner = '${authUser.id}' && cnpj_cpf = '${cleanDoc}'`,
         )
       } catch (_) {}
     }
 
-    if (!existingClient && name) {
+    if (!existingClient && nomeCliente) {
       try {
-        const safeName = name.replace(/'/g, "\\'")
+        const safeName = nomeCliente.replace(/'/g, "\\'")
         existingClient = $app.findFirstRecordByFilter(
           'clients',
-          `owner = '${authUser.id}' && name = '${safeName}'`,
+          `owner = '${authUser.id}' && nome_cliente = '${safeName}'`,
         )
       } catch (_) {}
     }
@@ -555,32 +562,52 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
     try {
       if (existingClient) {
         let changed = false
-        if (erpCode && existingClient.getString('erp_code') !== erpCode) {
-          existingClient.set('erp_code', erpCode)
+        if (codCliente && existingClient.getString('cod_cliente') !== codCliente) {
+          existingClient.set('cod_cliente', codCliente)
           changed = true
         }
-        if (cleanDoc && existingClient.getString('document') !== cleanDoc) {
-          existingClient.set('document', cleanDoc)
+        if (nomeCliente && existingClient.getString('nome_cliente') !== nomeCliente) {
+          existingClient.set('nome_cliente', nomeCliente)
           changed = true
         }
-        if (validEmail && existingClient.getString('email') !== validEmail) {
-          existingClient.set('email', validEmail)
+        if (razaoSocial && existingClient.getString('razao_social') !== razaoSocial) {
+          existingClient.set('razao_social', razaoSocial)
           changed = true
         }
-        if (cleanPhone && existingClient.getString('phone') !== cleanPhone) {
-          existingClient.set('phone', cleanPhone)
+        if (cleanDoc && existingClient.getString('cnpj_cpf') !== cleanDoc) {
+          existingClient.set('cnpj_cpf', cleanDoc)
           changed = true
         }
-        if (address && existingClient.getString('address') !== address) {
-          existingClient.set('address', address)
+        if (contato1 && existingClient.getString('contato1') !== contato1) {
+          existingClient.set('contato1', contato1)
           changed = true
         }
-        if (city && existingClient.getString('city') !== city) {
-          existingClient.set('city', city)
+        if (contato2 && existingClient.getString('contato2') !== contato2) {
+          existingClient.set('contato2', contato2)
           changed = true
         }
-        if (state && existingClient.getString('state') !== state) {
-          existingClient.set('state', state)
+        if (email1 && existingClient.getString('email1') !== email1) {
+          existingClient.set('email1', email1)
+          changed = true
+        }
+        if (email2 && existingClient.getString('email2') !== email2) {
+          existingClient.set('email2', email2)
+          changed = true
+        }
+        if (email3 && existingClient.getString('email3') !== email3) {
+          existingClient.set('email3', email3)
+          changed = true
+        }
+        if (bairro && existingClient.getString('bairro') !== bairro) {
+          existingClient.set('bairro', bairro)
+          changed = true
+        }
+        if (cidade && existingClient.getString('cidade') !== cidade) {
+          existingClient.set('cidade', cidade)
+          changed = true
+        }
+        if (estado && existingClient.getString('estado') !== estado) {
+          existingClient.set('estado', estado)
           changed = true
         }
         if (changed) {
@@ -591,20 +618,24 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
         const clientsCol = $app.findCollectionByNameOrId('clients')
         const newClient = new Record(clientsCol)
         newClient.set('owner', authUser.id)
-        newClient.set('name', name)
-        if (erpCode) newClient.set('erp_code', erpCode)
-        if (cleanDoc) newClient.set('document', cleanDoc)
-        if (validEmail) newClient.set('email', validEmail)
-        if (cleanPhone) newClient.set('phone', cleanPhone)
-        if (address) newClient.set('address', address)
-        if (city) newClient.set('city', city)
-        if (state) newClient.set('state', state)
+        newClient.set('nome_cliente', nomeCliente)
+        if (codCliente) newClient.set('cod_cliente', codCliente)
+        if (razaoSocial) newClient.set('razao_social', razaoSocial)
+        if (cleanDoc) newClient.set('cnpj_cpf', cleanDoc)
+        if (contato1) newClient.set('contato1', contato1)
+        if (contato2) newClient.set('contato2', contato2)
+        if (email1) newClient.set('email1', email1)
+        if (email2) newClient.set('email2', email2)
+        if (email3) newClient.set('email3', email3)
+        if (bairro) newClient.set('bairro', bairro)
+        if (cidade) newClient.set('cidade', cidade)
+        if (estado) newClient.set('estado', estado)
         $app.save(newClient)
         dayCreated++
       }
     } catch (saveClientErr) {
       console.log(
-        '[FlexSmart] Erro ao gravar cliente ' + name + ' (erpCode=' + erpCode + '):',
+        '[FlexSmart] Erro ao gravar cliente ' + nomeCliente + ' (codCliente=' + codCliente + '):',
         String(saveClientErr),
       )
     }
@@ -1096,7 +1127,9 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
   }
 
   const sort =
-    typeof query.sort === 'string' && query.sort.trim().length > 0 ? query.sort.trim() : 'name'
+    typeof query.sort === 'string' && query.sort.trim().length > 0
+      ? query.sort.trim()
+      : 'nome_cliente'
   const search = typeof query.search === 'string' ? query.search.trim() : ''
 
   // Montar filtro
@@ -1105,13 +1138,17 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
     const escaped = search.replace(/'/g, "\\'")
     filter =
       filter +
-      " && (name ~ '" +
+      " && (nome_cliente ~ '" +
       escaped +
-      "' || document ~ '" +
+      "' || razao_social ~ '" +
       escaped +
-      "' || erp_code ~ '" +
+      "' || cnpj_cpf ~ '" +
       escaped +
-      "' || email ~ '" +
+      "' || cod_cliente ~ '" +
+      escaped +
+      "' || email1 ~ '" +
+      escaped +
+      "' || cidade ~ '" +
       escaped +
       "')"
   }
@@ -1129,14 +1166,18 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
       const r = records[i]
       items.push({
         id: r.id,
-        name: r.getString('name'),
-        document: r.getString('document'),
-        email: r.getString('email'),
-        phone: r.getString('phone'),
-        address: r.getString('address'),
-        city: r.getString('city'),
-        state: r.getString('state'),
-        erp_code: r.getString('erp_code'),
+        cod_cliente: r.getString('cod_cliente'),
+        nome_cliente: r.getString('nome_cliente'),
+        razao_social: r.getString('razao_social'),
+        cnpj_cpf: r.getString('cnpj_cpf'),
+        contato1: r.getString('contato1'),
+        contato2: r.getString('contato2'),
+        email1: r.getString('email1'),
+        email2: r.getString('email2'),
+        email3: r.getString('email3'),
+        estado: r.getString('estado'),
+        cidade: r.getString('cidade'),
+        bairro: r.getString('bairro'),
         created: r.getString('created'),
         updated: r.getString('updated'),
       })

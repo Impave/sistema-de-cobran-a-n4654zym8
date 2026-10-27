@@ -41,14 +41,17 @@ export const clientsService = {
       // Escapa aspas para segurança no PocketBase filter
       const safeQ = q.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
       const conditions: string[] = [
-        `name ~ "${safeQ}"`,
-        `email ~ "${safeQ}"`,
-        `erp_code ~ "${safeQ}"`,
+        `nome_cliente ~ "${safeQ}"`,
+        `razao_social ~ "${safeQ}"`,
+        `cod_cliente ~ "${safeQ}"`,
+        `cidade ~ "${safeQ}"`,
+        `email1 ~ "${safeQ}"`,
       ]
       if (cleanDigits) {
-        conditions.push(`document ~ "${cleanDigits}"`)
-        conditions.push(`phone ~ "${cleanDigits}"`)
-        conditions.push(`erp_code = "${cleanDigits}"`)
+        conditions.push(`cnpj_cpf ~ "${cleanDigits}"`)
+        conditions.push(`cod_cliente = "${cleanDigits}"`)
+        conditions.push(`contato1 ~ "${cleanDigits}"`)
+        conditions.push(`contato2 ~ "${cleanDigits}"`)
       }
       filter = conditions.join(' || ')
     }
@@ -86,30 +89,66 @@ export const clientsService = {
     const user = pb.authStore.record
     if (!user) throw new Error('Usuário não autenticado')
 
-    // Remove formatação do documento
-    const cleanDoc = data.document ? data.document.replace(/\D/g, '') : ''
-    const cleanPhone = data.phone ? data.phone.replace(/\D/g, '') : ''
-    const cleanErpCode = data.erp_code ? data.erp_code.trim() : ''
+    const cleanCnpjCpf = data.cnpj_cpf ? data.cnpj_cpf.replace(/\D/g, '') : ''
+    const cleanContato1 = data.contato1 ? data.contato1.replace(/\D/g, '') : ''
+    const cleanContato2 = data.contato2 ? data.contato2.replace(/\D/g, '') : ''
+    const cleanCodCliente = data.cod_cliente ? data.cod_cliente.trim() : ''
 
     return await pb.collection('clients').create<ClientRecord>({
       ...data,
       owner: user.id,
-      document: cleanDoc,
-      phone: cleanPhone,
-      erp_code: cleanErpCode || undefined,
+      nome_cliente: data.nome_cliente ? data.nome_cliente.trim() : '',
+      razao_social: data.razao_social ? data.razao_social.trim() : '',
+      cnpj_cpf: cleanCnpjCpf || '',
+      contato1: cleanContato1 || '',
+      contato2: cleanContato2 || '',
+      cod_cliente: cleanCodCliente || '',
+      email1: data.email1 ? data.email1.trim() : '',
+      email2: data.email2 ? data.email2.trim() : '',
+      email3: data.email3 ? data.email3.trim() : '',
+      estado: data.estado ? data.estado.trim().toUpperCase() : '',
+      cidade: data.cidade ? data.cidade.trim() : '',
+      bairro: data.bairro ? data.bairro.trim() : '',
     })
   },
 
   async update(id: string, data: Partial<ClientFormData>): Promise<ClientRecord> {
     const payload = { ...data }
-    if (payload.document !== undefined) {
-      payload.document = payload.document ? payload.document.replace(/\D/g, '') : ''
+    if (payload.cnpj_cpf !== undefined) {
+      payload.cnpj_cpf = payload.cnpj_cpf ? payload.cnpj_cpf.replace(/\D/g, '') : ''
     }
-    if (payload.phone !== undefined) {
-      payload.phone = payload.phone ? payload.phone.replace(/\D/g, '') : ''
+    if (payload.contato1 !== undefined) {
+      payload.contato1 = payload.contato1 ? payload.contato1.replace(/\D/g, '') : ''
     }
-    if (payload.erp_code !== undefined) {
-      payload.erp_code = payload.erp_code ? payload.erp_code.trim() : ''
+    if (payload.contato2 !== undefined) {
+      payload.contato2 = payload.contato2 ? payload.contato2.replace(/\D/g, '') : ''
+    }
+    if (payload.cod_cliente !== undefined) {
+      payload.cod_cliente = payload.cod_cliente ? payload.cod_cliente.trim() : ''
+    }
+    if (payload.nome_cliente !== undefined) {
+      payload.nome_cliente = payload.nome_cliente ? payload.nome_cliente.trim() : ''
+    }
+    if (payload.razao_social !== undefined) {
+      payload.razao_social = payload.razao_social ? payload.razao_social.trim() : ''
+    }
+    if (payload.email1 !== undefined) {
+      payload.email1 = payload.email1 ? payload.email1.trim() : ''
+    }
+    if (payload.email2 !== undefined) {
+      payload.email2 = payload.email2 ? payload.email2.trim() : ''
+    }
+    if (payload.email3 !== undefined) {
+      payload.email3 = payload.email3 ? payload.email3.trim() : ''
+    }
+    if (payload.estado !== undefined) {
+      payload.estado = payload.estado ? payload.estado.trim().toUpperCase() : ''
+    }
+    if (payload.cidade !== undefined) {
+      payload.cidade = payload.cidade ? payload.cidade.trim() : ''
+    }
+    if (payload.bairro !== undefined) {
+      payload.bairro = payload.bairro ? payload.bairro.trim() : ''
     }
     return await pb.collection('clients').update<ClientRecord>(id, payload)
   },

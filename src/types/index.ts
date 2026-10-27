@@ -34,14 +34,18 @@ export interface UsersPaginatedResponse {
 export interface ClientRecord {
   id: string
   owner: string
-  name: string
-  email?: string
-  document?: string
-  phone?: string
-  address?: string
-  city?: string
-  state?: string
-  erp_code?: string
+  cod_cliente?: string
+  nome_cliente: string
+  razao_social?: string
+  cnpj_cpf?: string
+  contato1?: string
+  contato2?: string
+  email1?: string
+  email2?: string
+  email3?: string
+  estado?: string
+  cidade?: string
+  bairro?: string
   created: string
   updated: string
   // expand
@@ -114,14 +118,18 @@ export interface ChargeRecord {
 }
 
 export interface ClientFormData {
-  name: string
-  email?: string
-  document?: string
-  phone?: string
-  address?: string
-  city?: string
-  state?: string
-  erp_code?: string
+  cod_cliente?: string
+  nome_cliente: string
+  razao_social?: string
+  cnpj_cpf?: string
+  contato1?: string
+  contato2?: string
+  email1?: string
+  email2?: string
+  email3?: string
+  estado?: string
+  cidade?: string
+  bairro?: string
 }
 
 export interface ChargeFormData {

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-26T21:11:19.269Z",
+  "generatedAt": "2026-10-27T00:42:44.126Z",
   "collections": [
     {
       "name": "users",
@@ -29,21 +29,29 @@
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate"]
+          "autodateTriggers": [
+            "onCreate"
+          ]
         },
         {
           "name": "updated",
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate", "onUpdate"]
+          "autodateTriggers": [
+            "onCreate",
+            "onUpdate"
+          ]
         },
         {
           "name": "role",
           "type": "select",
           "required": false,
           "system": false,
-          "selectValues": ["admin", "operador"]
+          "selectValues": [
+            "admin",
+            "operador"
+          ]
         },
         {
           "name": "active",
@@ -76,63 +84,92 @@
           "collectionRef": "users"
         },
         {
-          "name": "name",
-          "type": "text",
-          "required": true,
-          "system": false
-        },
-        {
-          "name": "email",
-          "type": "email",
-          "required": false,
-          "system": false
-        },
-        {
-          "name": "document",
-          "type": "text",
-          "required": false,
-          "system": false
-        },
-        {
-          "name": "phone",
-          "type": "text",
-          "required": false,
-          "system": false
-        },
-        {
-          "name": "address",
-          "type": "text",
-          "required": false,
-          "system": false
-        },
-        {
-          "name": "city",
-          "type": "text",
-          "required": false,
-          "system": false
-        },
-        {
-          "name": "state",
-          "type": "text",
-          "required": false,
-          "system": false
-        },
-        {
           "name": "created",
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate"]
+          "autodateTriggers": [
+            "onCreate"
+          ]
         },
         {
           "name": "updated",
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate", "onUpdate"]
+          "autodateTriggers": [
+            "onCreate",
+            "onUpdate"
+          ]
         },
         {
-          "name": "erp_code",
+          "name": "cod_cliente",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "nome_cliente",
+          "type": "text",
+          "required": true,
+          "system": false
+        },
+        {
+          "name": "razao_social",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cnpj_cpf",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "contato1",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "contato2",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "email1",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "email2",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "email3",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "estado",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "cidade",
+          "type": "text",
+          "required": false,
+          "system": false
+        },
+        {
+          "name": "bairro",
           "type": "text",
           "required": false,
           "system": false
@@ -141,11 +178,11 @@
       "indexes": [
         "CREATE INDEX idx_clients_owner ON clients (owner)",
         "CREATE INDEX idx_clients_created ON clients (created)",
-        "CREATE INDEX `idx_clients_erp_code` ON `clients` (erp_code)",
-        "CREATE INDEX `idx_clients_name` ON `clients` (name)",
-        "CREATE INDEX `idx_clients_document` ON `clients` (document)",
-        "CREATE INDEX `idx_clients_phone` ON `clients` (phone)",
-        "CREATE INDEX `idx_clients_email` ON `clients` (email)"
+        "CREATE INDEX `idx_clients_cod_cliente` ON `clients` (cod_cliente)",
+        "CREATE INDEX `idx_clients_nome_cliente` ON `clients` (nome_cliente)",
+        "CREATE INDEX `idx_clients_razao_social` ON `clients` (razao_social)",
+        "CREATE INDEX `idx_clients_cnpj_cpf` ON `clients` (cnpj_cpf)",
+        "CREATE INDEX `idx_clients_cidade` ON `clients` (cidade)"
       ]
     },
     {
@@ -208,21 +245,31 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["pending", "paid", "overdue", "cancelled"]
+          "selectValues": [
+            "pending",
+            "paid",
+            "overdue",
+            "cancelled"
+          ]
         },
         {
           "name": "created",
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate"]
+          "autodateTriggers": [
+            "onCreate"
+          ]
         },
         {
           "name": "updated",
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate", "onUpdate"]
+          "autodateTriggers": [
+            "onCreate",
+            "onUpdate"
+          ]
         }
       ],
       "indexes": [
@@ -256,7 +303,14 @@
           "type": "select",
           "required": true,
           "system": false,
-          "selectValues": ["pending", "running", "cancelling", "cancelled", "done", "error"]
+          "selectValues": [
+            "pending",
+            "running",
+            "cancelling",
+            "cancelled",
+            "done",
+            "error"
+          ]
         },
         {
           "name": "started_at",
@@ -299,14 +353,19 @@
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate"]
+          "autodateTriggers": [
+            "onCreate"
+          ]
         },
         {
           "name": "updated",
           "type": "autodate",
           "required": false,
           "system": false,
-          "autodateTriggers": ["onCreate", "onUpdate"]
+          "autodateTriggers": [
+            "onCreate",
+            "onUpdate"
+          ]
         },
         {
           "name": "created_count",

@@ -77,7 +77,7 @@ export interface FlexSmartSyncResult {
 
 export interface FlexSmartSyncStatus {
   id: string
-  status: 'pending' | 'running' | 'cancelling' | 'cancelled' | 'done' | 'error'
+  status: 'pending' | 'running' | 'cancelling' | 'cancelled' | 'done' | 'error' | 'failed'
   currentStep: string
   count: number
   imported: number

@@ -103,21 +103,51 @@ routerAdd('POST', '/backend/v1/flexsmart/start-sync', (e) => {
     totalDays = 1
   }
 
-  // Cancelar processos anteriores em execução ou pendentes do mesmo owner
+  // Limpar e cancelar processos anteriores em andamento para evitar bloqueios órfãos:
+  // 1. Processos do próprio usuário autenticado são cancelados para dar lugar ao novo.
+  // 2. Qualquer processo em andamento no sistema inativo há mais de 30 minutos é finalizado como failed por inatividade.
   try {
-    const runningJobs = $app.findRecordsByFilter(
+    const activeGlobalJobs = $app.findRecordsByFilter(
       'flex_sync',
-      `owner = '${authUser.id}' && (status = 'running' || status = 'pending' || status = 'cancelling')`,
+      "status = 'running' || status = 'pending' || status = 'cancelling'",
       '-created',
       50,
       0,
     )
-    for (let i = 0; i < runningJobs.length; i++) {
-      const job = runningJobs[i]
-      job.set('status', 'cancelled')
-      job.set('current_step', 'Cancelado ao iniciar nova importação.')
-      job.set('finished_at', new Date().toISOString())
-      $app.save(job)
+    const nowMs = Date.now()
+    const staleThresholdMs = 30 * 60 * 1000 // 30 minutos
+
+    for (let i = 0; i < activeGlobalJobs.length; i++) {
+      const job = activeGlobalJobs[i]
+      const jobOwner = job.getString('owner')
+      const updatedStr = job.getString('updated') || job.getString('created')
+      let isStale = false
+      if (updatedStr) {
+        const updatedTime = new Date(updatedStr).getTime()
+        if (!isNaN(updatedTime) && nowMs - updatedTime >= staleThresholdMs) {
+          isStale = true
+        }
+      }
+
+      if (jobOwner === authUser.id) {
+        // Job do próprio usuário: cancela para iniciar a nova importação
+        job.set('status', 'cancelled')
+        job.set('current_step', 'Cancelado ao iniciar nova importação.')
+        job.set('finished_at', new Date().toISOString())
+        $app.save(job)
+      } else if (isStale) {
+        // Job travado de outro usuário/cron: finaliza por inatividade
+        job.set('status', 'failed')
+        job.set('error', 'finalizado automaticamente por inatividade')
+        job.set('current_step', 'Finalizado automaticamente por inatividade.')
+        job.set('finished_at', new Date().toISOString())
+        $app.save(job)
+        console.log(
+          '[FlexSmart start-sync] Job travado ' +
+            job.id +
+            ' finalizado automaticamente por inatividade.',
+        )
+      }
     }
   } catch (cleanErr) {
     console.log('[FlexSmart start-sync] Aviso ao limpar jobs antigos:', String(cleanErr))
@@ -231,10 +261,10 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
       totalDays: syncRecord.getInt('total_days'),
     })
   }
-  if (currentStatus === 'error') {
+  if (currentStatus === 'error' || currentStatus === 'failed') {
     return e.json(200, {
       success: false,
-      status: 'error',
+      status: currentStatus,
       done: true,
       error: syncRecord.getString('error'),
     })
@@ -769,7 +799,7 @@ routerAdd('POST', '/backend/v1/flexsmart/cancel-sync/{id}', (e) => {
   }
 
   const st = syncRecord.getString('status')
-  if (st === 'done' || st === 'cancelled' || st === 'error') {
+  if (st === 'done' || st === 'cancelled' || st === 'error' || st === 'failed') {
     return e.json(200, {
       success: true,
       status: st,
@@ -1330,21 +1360,64 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
   }
 
   // 4. Verificar se já existe sincronização ativa em andamento (manual ou outro processo)
+  // Proteção contra registros travados/órfãos: se o registro estiver sem atualização há mais de 30 minutos,
+  // finaliza-o automaticamente como 'failed' com mensagem explicativa e prossegue com a execução normalmente.
   try {
     const activeJobs = $app.findRecordsByFilter(
       'flex_sync',
       "status = 'running' || status = 'pending' || status = 'cancelling'",
       '-created',
-      10,
+      20,
       0,
     )
+
     if (activeJobs && activeJobs.length > 0) {
-      console.log(
-        '[FlexSmart Cron] Existe(m) ' +
-          activeJobs.length +
-          ' importação(ões) em andamento. Pulando execução desta hora para evitar concorrência.',
-      )
-      return
+      const nowMs = Date.now()
+      const staleThresholdMs = 30 * 60 * 1000 // 30 minutos
+      let genuinelyActiveCount = 0
+
+      for (let i = 0; i < activeJobs.length; i++) {
+        const job = activeJobs[i]
+        const updatedStr = job.getString('updated') || job.getString('created')
+        let isStale = true
+        if (updatedStr) {
+          const updatedTime = new Date(updatedStr).getTime()
+          if (!isNaN(updatedTime) && nowMs - updatedTime < staleThresholdMs) {
+            isStale = false
+          }
+        }
+
+        if (isStale) {
+          try {
+            job.set('status', 'failed')
+            job.set('error', 'finalizado automaticamente por inatividade')
+            job.set('finished_at', new Date().toISOString())
+            job.set('current_step', 'Sincronização finalizada automaticamente por inatividade.')
+            $app.save(job)
+            console.log(
+              '[FlexSmart Cron] Registro travado ' +
+                job.id +
+                ' finalizado automaticamente como failed por inatividade (> 30 min sem atualização).',
+            )
+          } catch (staleErr) {
+            console.log(
+              '[FlexSmart Cron] Erro ao finalizar registro travado ' + job.id + ':',
+              String(staleErr),
+            )
+          }
+        } else {
+          genuinelyActiveCount++
+        }
+      }
+
+      if (genuinelyActiveCount > 0) {
+        console.log(
+          '[FlexSmart Cron] Existe(m) ' +
+            genuinelyActiveCount +
+            ' importação(ões) realmente ativas em andamento. Pulando execução desta hora para evitar concorrência.',
+        )
+        return
+      }
     }
   } catch (checkErr) {
     console.log('[FlexSmart Cron] Aviso ao verificar jobs ativos:', String(checkErr))
@@ -1469,12 +1542,24 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
       lastLoginError
     console.log('[FlexSmart Cron] ' + errorMsg)
     try {
-      syncRecord.set('status', 'error')
+      syncRecord.set('status', 'failed')
       syncRecord.set('error', errorMsg)
       syncRecord.set('finished_at', new Date().toISOString())
-      syncRecord.set('current_step', 'Erro na autenticação automática do ERP.')
+      syncRecord.set(
+        'current_step',
+        'Falha na autenticação automática do ERP após ' +
+          maxLoginAttempts +
+          ' tentativas (' +
+          lastLoginError +
+          ').',
+      )
       $app.save(syncRecord)
-    } catch (_) {}
+    } catch (saveFailErr) {
+      console.log(
+        '[FlexSmart Cron] Erro ao gravar falha terminal de autenticação:',
+        String(saveFailErr),
+      )
+    }
     return
   }
 
@@ -1508,10 +1593,10 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
     const errorMsg = 'Erro na requisição ao ERP FlexSmart (getByDtAtz): ' + String(fetchErr)
     console.log('[FlexSmart Cron] ' + errorMsg)
     try {
-      syncRecord.set('status', 'error')
+      syncRecord.set('status', 'failed')
       syncRecord.set('error', errorMsg)
       syncRecord.set('finished_at', new Date().toISOString())
-      syncRecord.set('current_step', 'Falha na busca dos dados do dia no ERP.')
+      syncRecord.set('current_step', 'Falha na busca dos dados do dia no ERP: ' + String(fetchErr))
       $app.save(syncRecord)
     } catch (_) {}
     return

@@ -80,16 +80,20 @@ export default function ClientsPage() {
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [deletingClient, setDeletingClient] = useState<ClientRecord | null>(null)
 
-  // Form state
+  // Form state com os campos novos da coleção reconstruída
   const [formData, setFormData] = useState<ClientFormData>({
-    name: '',
-    email: '',
-    document: '',
-    phone: '',
-    address: '',
-    city: '',
-    state: '',
-    erp_code: '',
+    cod_cliente: '',
+    nome_cliente: '',
+    razao_social: '',
+    cnpj_cpf: '',
+    contato1: '',
+    contato2: '',
+    email1: '',
+    email2: '',
+    email3: '',
+    estado: '',
+    cidade: '',
+    bairro: '',
   })
   const [formLoading, setFormLoading] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
@@ -164,14 +168,18 @@ export default function ClientsPage() {
     if (newParam === 'true') {
       setEditingClient(null)
       setFormData({
-        name: '',
-        email: '',
-        document: '',
-        phone: '',
-        address: '',
-        city: '',
-        state: '',
-        erp_code: '',
+        cod_cliente: '',
+        nome_cliente: '',
+        razao_social: '',
+        cnpj_cpf: '',
+        contato1: '',
+        contato2: '',
+        email1: '',
+        email2: '',
+        email3: '',
+        estado: '',
+        cidade: '',
+        bairro: '',
       })
       setIsFormOpen(true)
     } else if (editId && clients.length > 0) {
@@ -179,14 +187,18 @@ export default function ClientsPage() {
       if (found) {
         setEditingClient(found)
         setFormData({
-          name: found.name,
-          email: found.email || '',
-          document: formatDocument(found.document),
-          phone: formatPhone(found.phone),
-          address: found.address || '',
-          city: found.city || '',
-          state: found.state || '',
-          erp_code: found.erp_code || '',
+          cod_cliente: found.cod_cliente || found.erp_code || '',
+          nome_cliente: found.nome_cliente || found.name || '',
+          razao_social: found.razao_social || '',
+          cnpj_cpf: formatDocument(found.cnpj_cpf || found.document),
+          contato1: formatPhone(found.contato1 || found.phone),
+          contato2: formatPhone(found.contato2),
+          email1: found.email1 || found.email || '',
+          email2: found.email2 || '',
+          email3: found.email3 || '',
+          estado: found.estado || found.state || '',
+          cidade: found.cidade || found.city || '',
+          bairro: found.bairro || '',
         })
         setIsFormOpen(true)
       }
@@ -196,14 +208,18 @@ export default function ClientsPage() {
   const handleOpenCreate = () => {
     setEditingClient(null)
     setFormData({
-      name: '',
-      email: '',
-      document: '',
-      phone: '',
-      address: '',
-      city: '',
-      state: '',
-      erp_code: '',
+      cod_cliente: '',
+      nome_cliente: '',
+      razao_social: '',
+      cnpj_cpf: '',
+      contato1: '',
+      contato2: '',
+      email1: '',
+      email2: '',
+      email3: '',
+      estado: '',
+      cidade: '',
+      bairro: '',
     })
     setFormError(null)
     setIsFormOpen(true)
@@ -213,14 +229,18 @@ export default function ClientsPage() {
   const handleOpenEdit = (client: ClientRecord) => {
     setEditingClient(client)
     setFormData({
-      name: client.name,
-      email: client.email || '',
-      document: formatDocument(client.document),
-      phone: formatPhone(client.phone),
-      address: client.address || '',
-      city: client.city || '',
-      state: client.state || '',
-      erp_code: client.erp_code || '',
+      cod_cliente: client.cod_cliente || client.erp_code || '',
+      nome_cliente: client.nome_cliente || client.name || '',
+      razao_social: client.razao_social || '',
+      cnpj_cpf: formatDocument(client.cnpj_cpf || client.document),
+      contato1: formatPhone(client.contato1 || client.phone),
+      contato2: formatPhone(client.contato2),
+      email1: client.email1 || client.email || '',
+      email2: client.email2 || '',
+      email3: client.email3 || '',
+      estado: client.estado || client.state || '',
+      cidade: client.cidade || client.city || '',
+      bairro: client.bairro || '',
     })
     setFormError(null)
     setIsFormOpen(true)
@@ -248,24 +268,29 @@ export default function ClientsPage() {
     e.preventDefault()
     setFormError(null)
 
-    if (!formData.name || formData.name.trim().length < 2) {
+    const finalName = (formData.nome_cliente || '').trim()
+    if (!finalName || finalName.length < 2) {
       setFormError('O nome do cliente é obrigatório e deve ter no mínimo 2 caracteres.')
       return
     }
 
     setFormLoading(true)
     try {
+      const payload: ClientFormData = {
+        ...formData,
+        nome_cliente: finalName,
+      }
       if (editingClient) {
-        await clientsService.update(editingClient.id, formData)
+        await clientsService.update(editingClient.id, payload)
         toast({
           title: 'Cliente atualizado',
-          description: `Os dados de ${formData.name} foram atualizados com sucesso.`,
+          description: `Os dados de ${finalName} foram atualizados com sucesso.`,
         })
       } else {
-        await clientsService.create(formData)
+        await clientsService.create(payload)
         toast({
           title: 'Cliente cadastrado',
-          description: `${formData.name} foi adicionado à sua base de clientes.`,
+          description: `${finalName} foi adicionado à sua base de clientes.`,
         })
       }
       handleCloseForm()
@@ -287,11 +312,13 @@ export default function ClientsPage() {
   const handleConfirmDelete = async () => {
     if (!deletingClient) return
     setFormLoading(true)
+    const displayName =
+      deletingClient.nome_cliente || deletingClient.razao_social || deletingClient.name || 'Cliente'
     try {
       await clientsService.delete(deletingClient.id)
       toast({
         title: 'Cliente excluído',
-        description: `O cliente ${deletingClient.name} e suas cobranças vinculadas foram removidos.`,
+        description: `O cliente ${displayName} e suas cobranças vinculadas foram removidos.`,
       })
       handleCloseDelete()
       loadData()
@@ -963,10 +990,10 @@ export default function ClientsPage() {
       )}
       {/* Barra de Busca */}{' '}
       <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-xs flex items-center gap-3">
-        <Search className="w-4 h-4 text-slate-400 ml-1" />
+        <Search className="w-4 h-4 text-slate-400 ml-1 shrink-0" />
         <Input
           type="text"
-          placeholder="Buscar por nome, email, CPF ou CNPJ..."
+          placeholder="Buscar por nome, razão social, código ERP, CPF/CNPJ, contatos, e-mails ou cidade..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="border-0 shadow-none focus-visible:ring-0 px-0 text-sm h-auto placeholder:text-slate-400"
@@ -1029,10 +1056,11 @@ export default function ClientsPage() {
                 <thead className="bg-slate-50/75 border-b border-slate-200 text-slate-500 uppercase tracking-wider font-semibold">
                   <tr>
                     <th className="py-3.5 px-4">Código</th>
-                    <th className="py-3.5 px-5">Cliente</th>
-                    <th className="py-3.5 px-5">Documento</th>
-                    <th className="py-3.5 px-5">Telefone</th>
-                    <th className="py-3.5 px-5">Localização</th>
+                    <th className="py-3.5 px-5">Cliente / Razão Social</th>
+                    <th className="py-3.5 px-5">CPF / CNPJ</th>
+                    <th className="py-3.5 px-5">Contatos</th>
+                    <th className="py-3.5 px-5">E-mails</th>
+                    <th className="py-3.5 px-5">Cidade / Estado</th>
                     <th className="py-3.5 px-4 text-center">Cobranças</th>
                     <th className="py-3.5 px-5 text-right">Ações</th>
                   </tr>
@@ -1040,6 +1068,19 @@ export default function ClientsPage() {
                 <tbody className="divide-y divide-slate-100">
                   {filteredClients.map((client, index) => {
                     const count = chargeCountMap.get(client.id) || 0
+                    const cod = client.cod_cliente || client.erp_code
+                    const nome = client.nome_cliente || client.name || 'Cliente'
+                    const razao = client.razao_social
+                    const doc = client.cnpj_cpf || client.document
+                    const c1 = client.contato1 || client.phone
+                    const c2 = client.contato2
+                    const em1 = client.email1 || client.email
+                    const em2 = client.email2
+                    const em3 = client.email3
+                    const cid = client.cidade || client.city
+                    const est = client.estado || client.state
+                    const bai = client.bairro
+
                     return (
                       <tr
                         key={client.id}
@@ -1050,13 +1091,13 @@ export default function ClientsPage() {
                         }
                       >
                         <td className="py-3.5 px-4 whitespace-nowrap">
-                          {client.erp_code ? (
+                          {cod ? (
                             <span
                               className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-50/80 text-indigo-700 border border-indigo-200/70"
-                              title={`Código ERP (cdCliente): ${client.erp_code}`}
+                              title={`Código ERP (cd_cliente): ${cod}`}
                             >
                               <Building2 className="w-3 h-3 text-indigo-500 shrink-0" />
-                              {client.erp_code}
+                              {cod}
                             </span>
                           ) : (
                             <span className="text-slate-400 font-mono text-xs">-</span>
@@ -1064,54 +1105,106 @@ export default function ClientsPage() {
                         </td>
                         <td className="py-3.5 px-5">
                           <div className="flex items-center gap-3">
-                            <ClientAvatar name={client.name} size="md" />
-                            <div className="min-w-0">
-                              <p className="font-semibold text-slate-900 text-sm truncate">
-                                {client.name}
+                            <ClientAvatar name={nome} size="md" />
+                            <div className="min-w-0 max-w-[240px]">
+                              <p
+                                className="font-semibold text-slate-900 text-sm truncate"
+                                title={nome}
+                              >
+                                {nome}
                               </p>
-                              {client.email ? (
-                                <p className="text-slate-500 text-xs truncate flex items-center gap-1 mt-0.5">
-                                  <Mail className="w-3 h-3 text-slate-400 inline shrink-0" />
-                                  {client.email}
+                              {razao && razao !== nome ? (
+                                <p
+                                  className="text-slate-500 text-xs truncate"
+                                  title={`Razão Social: ${razao}`}
+                                >
+                                  {razao}
                                 </p>
-                              ) : (
-                                <p className="text-slate-400 text-xs italic">Sem email</p>
-                              )}
+                              ) : null}
                             </div>
                           </div>
                         </td>
-                        <td className="py-3.5 px-5">
-                          <span className="font-mono text-slate-700">
-                            {formatDocument(client.document)}
-                          </span>
+                        <td className="py-3.5 px-5 whitespace-nowrap">
+                          {doc ? (
+                            <span className="font-mono text-slate-700">{formatDocument(doc)}</span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
                         </td>
-                        <td className="py-3.5 px-5 text-slate-600">
-                          {client.phone ? (
-                            <span className="flex items-center gap-1.5">
-                              <Phone className="w-3.5 h-3.5 text-slate-400" />
-                              {formatPhone(client.phone)}
-                            </span>
+                        <td className="py-3.5 px-5 text-slate-600 whitespace-nowrap">
+                          {c1 || c2 ? (
+                            <div className="space-y-0.5">
+                              {c1 && (
+                                <span className="flex items-center gap-1.5 text-xs">
+                                  <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                  {formatPhone(c1)}
+                                </span>
+                              )}
+                              {c2 && (
+                                <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                                  <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                  {formatPhone(c2)}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-slate-400">-</span>
                           )}
                         </td>
                         <td className="py-3.5 px-5 text-slate-600">
-                          {client.city || client.state ? (
-                            <span className="flex items-center gap-1 truncate max-w-[150px]">
-                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                              {[client.city, client.state].filter(Boolean).join(' - ')}
-                            </span>
+                          {em1 || em2 || em3 ? (
+                            <div className="space-y-0.5 max-w-[200px]">
+                              {em1 && (
+                                <p
+                                  className="text-xs text-slate-700 truncate flex items-center gap-1"
+                                  title={em1}
+                                >
+                                  <Mail className="w-3 h-3 text-slate-400 shrink-0" />
+                                  {em1}
+                                </p>
+                              )}
+                              {em2 && (
+                                <p className="text-[11px] text-slate-500 truncate" title={em2}>
+                                  {em2}
+                                </p>
+                              )}
+                              {em3 && (
+                                <p className="text-[11px] text-slate-400 truncate" title={em3}>
+                                  {em3}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-400 italic text-xs">Sem email</span>
+                          )}
+                        </td>
+                        <td className="py-3.5 px-5 text-slate-600 whitespace-nowrap">
+                          {cid || est ? (
+                            <div className="space-y-0.5">
+                              <span className="flex items-center gap-1 font-medium text-slate-800">
+                                <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                {[cid, est].filter(Boolean).join(' - ')}
+                              </span>
+                              {bai && (
+                                <span
+                                  className="text-[11px] text-slate-500 pl-4.5 block truncate max-w-[140px]"
+                                  title={bai}
+                                >
+                                  {bai}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-slate-400">-</span>
                           )}
                         </td>
-                        <td className="py-3.5 px-4 text-center">
+                        <td className="py-3.5 px-4 text-center whitespace-nowrap">
                           <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200">
                             <Receipt className="w-3 h-3 text-slate-500" />
                             {count}
                           </span>
                         </td>
-                        <td className="py-3.5 px-5 text-right">
+                        <td className="py-3.5 px-5 text-right whitespace-nowrap">
                           <div className="flex items-center justify-end gap-1">
                             <Button
                               variant="ghost"
@@ -1145,18 +1238,32 @@ export default function ClientsPage() {
           <div className="sm:hidden space-y-3">
             {filteredClients.map((client) => {
               const count = chargeCountMap.get(client.id) || 0
+              const cod = client.cod_cliente || client.erp_code
+              const nome = client.nome_cliente || client.name || 'Cliente'
+              const razao = client.razao_social
+              const doc = client.cnpj_cpf || client.document
+              const c1 = client.contato1 || client.phone
+              const c2 = client.contato2
+              const em1 = client.email1 || client.email
+              const cid = client.cidade || client.city
+              const est = client.estado || client.state
+              const bai = client.bairro
+
               return (
                 <Card key={client.id} className="rounded-xl border border-slate-200/80 shadow-xs">
                   <CardContent className="p-4 space-y-3">
                     <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-3">
-                        <ClientAvatar name={client.name} size="md" />
-                        <div>
-                          <h4 className="font-semibold text-slate-900 text-sm">{client.name}</h4>
-                          <p className="text-xs text-slate-500">{client.email || 'Sem email'}</p>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <ClientAvatar name={nome} size="md" />
+                        <div className="min-w-0">
+                          <h4 className="font-semibold text-slate-900 text-sm truncate">{nome}</h4>
+                          {razao && razao !== nome ? (
+                            <p className="text-xs text-slate-500 truncate">{razao}</p>
+                          ) : null}
+                          <p className="text-xs text-slate-500 truncate">{em1 || 'Sem email'}</p>
                         </div>
                       </div>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold text-xs border border-slate-200 shrink-0">
                         <Receipt className="w-3 h-3 text-slate-500" />
                         {count}
                       </span>
@@ -1165,25 +1272,35 @@ export default function ClientsPage() {
                     <div className="grid grid-cols-3 gap-2 text-xs pt-2 border-t border-slate-100">
                       <div>
                         <span className="text-slate-400 block text-[11px]">Código</span>
-                        {client.erp_code ? (
-                          <span className="font-mono font-semibold text-indigo-700">
-                            #{client.erp_code}
-                          </span>
+                        {cod ? (
+                          <span className="font-mono font-semibold text-indigo-700">#{cod}</span>
                         ) : (
                           <span className="text-slate-400">-</span>
                         )}
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[11px]">Documento</span>
-                        <span className="font-mono text-slate-700">
-                          {formatDocument(client.document)}
+                        <span className="font-mono text-slate-700 truncate block">
+                          {doc ? formatDocument(doc) : '-'}
                         </span>
                       </div>
                       <div>
-                        <span className="text-slate-400 block text-[11px]">Telefone</span>
-                        <span className="text-slate-700">{formatPhone(client.phone)}</span>
+                        <span className="text-slate-400 block text-[11px]">Contato</span>
+                        <span className="text-slate-700 truncate block">
+                          {c1 ? formatPhone(c1) : c2 ? formatPhone(c2) : '-'}
+                        </span>
                       </div>
                     </div>
+
+                    {(cid || est || bai) && (
+                      <div className="text-xs text-slate-600 flex items-center gap-1 pt-1">
+                        <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span className="truncate">
+                          {[cid, est].filter(Boolean).join(' - ')}
+                          {bai ? ` (${bai})` : ''}
+                        </span>
+                      </div>
+                    )}
 
                     <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
                       <Button
@@ -1322,121 +1439,190 @@ export default function ClientsPage() {
           )}
 
           <form onSubmit={handleSubmitForm} className="space-y-4 pt-2">
+            {/* Bloco 1: Identificação principal */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="sm:col-span-2">
-                <Label htmlFor="c-name" className="text-xs font-semibold text-slate-700">
-                  Nome completo <span className="text-red-500">*</span>
-                </Label>
-                <Input
-                  id="c-name"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="Ex: Maria Oliveira ou Empresa XYZ"
-                  className="mt-1 text-sm"
-                  required
-                />
-              </div>
-
               <div>
-                <Label htmlFor="c-erp-code" className="text-xs font-semibold text-slate-700">
-                  Código ERP (cdCliente)
+                <Label htmlFor="c-cod-cliente" className="text-xs font-semibold text-slate-700">
+                  Código ERP (cod_cliente)
                 </Label>
                 <Input
-                  id="c-erp-code"
-                  value={formData.erp_code || ''}
-                  onChange={(e) => setFormData({ ...formData, erp_code: e.target.value })}
+                  id="c-cod-cliente"
+                  value={formData.cod_cliente || ''}
+                  onChange={(e) => setFormData({ ...formData, cod_cliente: e.target.value })}
                   placeholder="Ex: 20445"
                   className="mt-1 text-sm font-mono"
                 />
               </div>
+
+              <div className="sm:col-span-2">
+                <Label htmlFor="c-nome-cliente" className="text-xs font-semibold text-slate-700">
+                  Nome do cliente <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="c-nome-cliente"
+                  value={formData.nome_cliente}
+                  onChange={(e) => setFormData({ ...formData, nome_cliente: e.target.value })}
+                  placeholder="Ex: Auto Peças Modelo Ltda"
+                  className="mt-1 text-sm"
+                  required
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <Label htmlFor="c-email" className="text-xs font-semibold text-slate-700">
-                  Email
+                <Label htmlFor="c-razao-social" className="text-xs font-semibold text-slate-700">
+                  Razão social
                 </Label>
                 <Input
-                  id="c-email"
-                  type="email"
-                  value={formData.email}
-                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                  placeholder="cliente@email.com"
+                  id="c-razao-social"
+                  value={formData.razao_social || ''}
+                  onChange={(e) => setFormData({ ...formData, razao_social: e.target.value })}
+                  placeholder="Ex: Auto Peças Modelo Comércio Ltda"
                   className="mt-1 text-sm"
                 />
               </div>
 
               <div>
-                <Label htmlFor="c-document" className="text-xs font-semibold text-slate-700">
-                  Documento (CPF / CNPJ)
+                <Label htmlFor="c-cnpj-cpf" className="text-xs font-semibold text-slate-700">
+                  CPF / CNPJ
                 </Label>
                 <Input
-                  id="c-document"
-                  value={formData.document}
+                  id="c-cnpj-cpf"
+                  value={formData.cnpj_cpf || ''}
                   onChange={(e) =>
-                    setFormData({ ...formData, document: formatDocument(e.target.value) })
+                    setFormData({ ...formData, cnpj_cpf: formatDocument(e.target.value) })
                   }
-                  placeholder="000.000.000-00 ou CNPJ"
+                  placeholder="00.000.000/0000-00 ou CPF"
                   className="mt-1 text-sm"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* Bloco 2: Contatos telefônicos */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1 border-t border-slate-100">
               <div>
-                <Label htmlFor="c-phone" className="text-xs font-semibold text-slate-700">
-                  Telefone / WhatsApp
+                <Label htmlFor="c-contato1" className="text-xs font-semibold text-slate-700">
+                  Contato 1 (Celular / Whats / Fone)
                 </Label>
                 <Input
-                  id="c-phone"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: formatPhone(e.target.value) })}
+                  id="c-contato1"
+                  value={formData.contato1 || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, contato1: formatPhone(e.target.value) })
+                  }
                   placeholder="(11) 98765-4321"
                   className="mt-1 text-sm"
                 />
               </div>
 
               <div>
-                <Label htmlFor="c-address" className="text-xs font-semibold text-slate-700">
-                  Endereço
+                <Label htmlFor="c-contato2" className="text-xs font-semibold text-slate-700">
+                  Contato 2 (Secundário / Comercial)
                 </Label>
                 <Input
-                  id="c-address"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  placeholder="Rua, número, complemento"
+                  id="c-contato2"
+                  value={formData.contato2 || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, contato2: formatPhone(e.target.value) })
+                  }
+                  placeholder="(11) 3333-4444"
                   className="mt-1 text-sm"
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
+            {/* Bloco 3: Três e-mails do CSV */}
+            <div className="space-y-2 pt-1 border-t border-slate-100">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                E-mails para cobrança / contato
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div>
+                  <Label htmlFor="c-email1" className="text-xs font-semibold text-slate-700">
+                    E-mail 1 (Principal)
+                  </Label>
+                  <Input
+                    id="c-email1"
+                    type="email"
+                    value={formData.email1 || ''}
+                    onChange={(e) => setFormData({ ...formData, email1: e.target.value })}
+                    placeholder="financeiro@empresa.com"
+                    className="mt-1 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="c-email2" className="text-xs font-semibold text-slate-700">
+                    E-mail 2
+                  </Label>
+                  <Input
+                    id="c-email2"
+                    type="email"
+                    value={formData.email2 || ''}
+                    onChange={(e) => setFormData({ ...formData, email2: e.target.value })}
+                    placeholder="compras@empresa.com"
+                    className="mt-1 text-xs"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="c-email3" className="text-xs font-semibold text-slate-700">
+                    E-mail 3
+                  </Label>
+                  <Input
+                    id="c-email3"
+                    type="email"
+                    value={formData.email3 || ''}
+                    onChange={(e) => setFormData({ ...formData, email3: e.target.value })}
+                    placeholder="diretoria@empresa.com"
+                    className="mt-1 text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Bloco 4: Localização (Estado, Cidade, Bairro) */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1 border-t border-slate-100">
               <div>
-                <Label htmlFor="c-city" className="text-xs font-semibold text-slate-700">
+                <Label htmlFor="c-estado" className="text-xs font-semibold text-slate-700">
+                  Estado (UF)
+                </Label>
+                <Input
+                  id="c-estado"
+                  value={formData.estado || ''}
+                  onChange={(e) =>
+                    setFormData({ ...formData, estado: e.target.value.toUpperCase().slice(0, 2) })
+                  }
+                  placeholder="SP"
+                  maxLength={2}
+                  className="mt-1 text-sm uppercase"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="c-cidade" className="text-xs font-semibold text-slate-700">
                   Cidade
                 </Label>
                 <Input
-                  id="c-city"
-                  value={formData.city}
-                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                  id="c-cidade"
+                  value={formData.cidade || ''}
+                  onChange={(e) => setFormData({ ...formData, cidade: e.target.value })}
                   placeholder="Ex: São Paulo"
                   className="mt-1 text-sm"
                 />
               </div>
 
               <div>
-                <Label htmlFor="c-state" className="text-xs font-semibold text-slate-700">
-                  Estado (UF)
+                <Label htmlFor="c-bairro" className="text-xs font-semibold text-slate-700">
+                  Bairro
                 </Label>
                 <Input
-                  id="c-state"
-                  value={formData.state}
-                  onChange={(e) =>
-                    setFormData({ ...formData, state: e.target.value.toUpperCase().slice(0, 2) })
-                  }
-                  placeholder="SP"
-                  maxLength={2}
-                  className="mt-1 text-sm uppercase"
+                  id="c-bairro"
+                  value={formData.bairro || ''}
+                  onChange={(e) => setFormData({ ...formData, bairro: e.target.value })}
+                  placeholder="Ex: Centro"
+                  className="mt-1 text-sm"
                 />
               </div>
             </div>
@@ -1487,8 +1673,15 @@ export default function ClientsPage() {
 
           {deletingClient && (
             <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-1">
-              <p className="font-semibold text-slate-800">{deletingClient.name}</p>
-              <p className="text-slate-500">{deletingClient.email || 'Sem email'}</p>
+              <p className="font-semibold text-slate-800">
+                {deletingClient.nome_cliente || deletingClient.razao_social || deletingClient.name}
+              </p>
+              {deletingClient.razao_social && (
+                <p className="text-slate-500">Razão Social: {deletingClient.razao_social}</p>
+              )}
+              <p className="text-slate-500">
+                {deletingClient.email1 || deletingClient.email || 'Sem email'}
+              </p>
               <p className="text-red-600 font-medium pt-1">
                 {chargeCountMap.get(deletingClient.id) || 0} cobrança(s) vinculada(s)
               </p>

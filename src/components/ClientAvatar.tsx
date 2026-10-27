@@ -18,12 +18,13 @@ const colors = [
 ]
 
 export const ClientAvatar: React.FC<ClientAvatarProps> = ({ name, size = 'md', className }) => {
-  const initials = getInitials(name)
+  const safeName = name && typeof name === 'string' && name.trim().length > 0 ? name : 'Cliente'
+  const initials = getInitials(safeName)
 
   // Seleciona cor baseada no hash do nome
   let hash = 0
-  for (let i = 0; i < (name || '').length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  for (let i = 0; i < safeName.length; i++) {
+    hash = safeName.charCodeAt(i) + ((hash << 5) - hash)
   }
   const colorClass = colors[Math.abs(hash) % colors.length]
 

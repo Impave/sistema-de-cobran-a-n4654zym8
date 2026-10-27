@@ -48,6 +48,15 @@ export interface ClientRecord {
   bairro?: string
   created: string
   updated: string
+  // aliases de retrocompatibilidade para componentes legados (opcionais)
+  erp_code?: string
+  name?: string
+  email?: string
+  document?: string
+  phone?: string
+  address?: string
+  city?: string
+  state?: string
   // expand
   expand?: {
     owner?: UserProfile
@@ -130,6 +139,8 @@ export interface ClientFormData {
   estado?: string
   cidade?: string
   bairro?: string
+  // aliases opcionais
+  erp_code?: string
 }
 
 export interface ChargeFormData {

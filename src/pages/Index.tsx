@@ -550,7 +550,8 @@ export default function Dashboard() {
                 <tbody className="divide-y divide-slate-100">
                   {upcomingCharges.map((charge) => {
                     const client = charge.expand?.client || clientMap.get(charge.client)
-                    const clientName = client?.nome_cliente || client?.razao_social || 'Cliente'
+                    const clientName =
+                      client?.nome_cliente || client?.razao_social || 'Cliente removido'
                     const isOverdue = charge.status === 'overdue'
 
                     return (

@@ -45,7 +45,11 @@ export const clientsService = {
         `razao_social ~ "${safeQ}"`,
         `cod_cliente ~ "${safeQ}"`,
         `cidade ~ "${safeQ}"`,
+        `bairro ~ "${safeQ}"`,
+        `estado ~ "${safeQ}"`,
         `email1 ~ "${safeQ}"`,
+        `email2 ~ "${safeQ}"`,
+        `email3 ~ "${safeQ}"`,
       ]
       if (cleanDigits) {
         conditions.push(`cnpj_cpf ~ "${cleanDigits}"`)
@@ -92,17 +96,16 @@ export const clientsService = {
     const cleanCnpjCpf = data.cnpj_cpf ? data.cnpj_cpf.replace(/\D/g, '') : ''
     const cleanContato1 = data.contato1 ? data.contato1.replace(/\D/g, '') : ''
     const cleanContato2 = data.contato2 ? data.contato2.replace(/\D/g, '') : ''
-    const cleanCodCliente = data.cod_cliente ? data.cod_cliente.trim() : ''
+    const cleanCodCliente = (data.cod_cliente || data.erp_code || '').trim()
 
     return await pb.collection('clients').create<ClientRecord>({
-      ...data,
       owner: user.id,
+      cod_cliente: cleanCodCliente || '',
       nome_cliente: data.nome_cliente ? data.nome_cliente.trim() : '',
       razao_social: data.razao_social ? data.razao_social.trim() : '',
       cnpj_cpf: cleanCnpjCpf || '',
       contato1: cleanContato1 || '',
       contato2: cleanContato2 || '',
-      cod_cliente: cleanCodCliente || '',
       email1: data.email1 ? data.email1.trim() : '',
       email2: data.email2 ? data.email2.trim() : '',
       email3: data.email3 ? data.email3.trim() : '',
@@ -123,9 +126,13 @@ export const clientsService = {
     if (payload.contato2 !== undefined) {
       payload.contato2 = payload.contato2 ? payload.contato2.replace(/\D/g, '') : ''
     }
+    if (payload.erp_code !== undefined && payload.cod_cliente === undefined) {
+      payload.cod_cliente = payload.erp_code ? payload.erp_code.trim() : ''
+    }
     if (payload.cod_cliente !== undefined) {
       payload.cod_cliente = payload.cod_cliente ? payload.cod_cliente.trim() : ''
     }
+    delete payload.erp_code
     if (payload.nome_cliente !== undefined) {
       payload.nome_cliente = payload.nome_cliente ? payload.nome_cliente.trim() : ''
     }

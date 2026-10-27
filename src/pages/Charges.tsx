@@ -485,7 +485,8 @@ export default function ChargesPage() {
                 <tbody className="divide-y divide-slate-100">
                   {filteredCharges.map((charge, index) => {
                     const client = charge.expand?.client || clientMap.get(charge.client)
-                    const clientName = client?.nome_cliente || client?.razao_social || 'Cliente'
+                    const clientName =
+                      client?.nome_cliente || client?.razao_social || 'Cliente removido'
                     const isOverdue = charge.status === 'overdue'
 
                     return (
@@ -578,7 +579,7 @@ export default function ChargesPage() {
           <div className="sm:hidden space-y-3">
             {filteredCharges.map((charge) => {
               const client = charge.expand?.client || clientMap.get(charge.client)
-              const clientName = client?.nome_cliente || client?.razao_social || 'Cliente'
+              const clientName = client?.nome_cliente || client?.razao_social || 'Cliente removido'
               const isOverdue = charge.status === 'overdue'
 
               return (
@@ -719,7 +720,9 @@ export default function ChargesPage() {
                   <SelectContent>
                     {clients.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.nome_cliente || c.razao_social} {c.cod_cliente ? `[#${c.cod_cliente}]` : ''} {c.email1 ? `(${c.email1})` : ''}
+                        {c.nome_cliente || c.razao_social}{' '}
+                        {c.cod_cliente ? `[#${c.cod_cliente}]` : ''}{' '}
+                        {c.email1 ? `(${c.email1})` : ''}
                       </SelectItem>
                     ))}
                   </SelectContent>

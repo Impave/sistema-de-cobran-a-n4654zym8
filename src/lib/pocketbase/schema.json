@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-27T03:16:58.014Z",
+  "generatedAt": "2026-10-27T03:27:45.075Z",
   "collections": [
     {
       "name": "users",
@@ -61,8 +61,8 @@
       "name": "clients",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != '' && (owner = @request.auth.id || @request.auth.email = 'garantias-service@impave.com.br')",
-        "view": "@request.auth.id != '' && (owner = @request.auth.id || @request.auth.email = 'garantias-service@impave.com.br')",
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
         "create": "@request.auth.id != ''",
         "update": "@request.auth.id != '' && owner = @request.auth.id",
         "delete": "@request.auth.id != '' && owner = @request.auth.id"

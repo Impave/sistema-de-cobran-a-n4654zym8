@@ -224,7 +224,7 @@ export default function Dashboard() {
               title="Versão ativa da aplicação"
             >
               <Tag className="w-3 h-3 text-emerald-600" />
-              v0.0.21
+              v0.0.51
             </Badge>
           </div>
           <p className="text-sm text-slate-500 mt-0.5">

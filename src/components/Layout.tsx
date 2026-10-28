@@ -23,8 +23,8 @@ const navItems = [
   { name: 'Clientes', path: '/clients', icon: Users },
   { name: 'Cobranças', path: '/charges', icon: Receipt },
   { name: 'Títulos', path: '/titles', icon: FileText },
-  { name: 'Configurações', path: '/settings', icon: Settings },
   { name: 'Usuários', path: '/users', icon: UserCog, adminOnly: true },
+  { name: 'Configurações', path: '/settings', icon: Settings },
 ]
 
 export default function Layout() {
@@ -154,8 +154,8 @@ export default function Layout() {
               <span className="font-bold text-lg text-slate-900 tracking-tight leading-tight">
                 CobrançaPro
               </span>
-              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-semibold border border-slate-200">
-                v0.0.21
+              <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-semibold border border-slate-200 tabular-nums">
+                v0.0.51
               </span>
             </div>
             <span className="text-[11px] text-slate-400 font-medium">Gestão Financeira</span>
@@ -172,9 +172,9 @@ export default function Layout() {
                 to={item.path}
                 className={({ isActive }) =>
                   cn(
-                    'group relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
+                    'group relative flex items-center justify-center lg:justify-start gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150',
                     isActive
-                      ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-xs border-l-4 border-indigo-600'
+                      ? 'bg-indigo-50 text-indigo-700 font-semibold shadow-xs border-l-4 md:border-l-0 lg:border-l-4 border-indigo-600'
                       : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900',
                   )
                 }
@@ -191,6 +191,7 @@ export default function Layout() {
         {/* User profile footer */}
         {user && (
           <div className="p-2 lg:p-3 border-t border-slate-100 bg-slate-50/50">
+            {/* Expanded on lg: */}
             <div className="hidden lg:flex items-center gap-3 p-2 rounded-lg mb-1">
               <div className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs border border-indigo-200 shrink-0">
                 {getInitials(user.name || user.email)}
@@ -200,6 +201,16 @@ export default function Layout() {
                   {user.name || 'Usuário'}
                 </p>
                 <p className="text-xs text-slate-500 truncate">{user.email}</p>
+              </div>
+            </div>
+
+            {/* Collapsed avatar icon on md (rail) */}
+            <div
+              className="flex lg:hidden items-center justify-center py-1 mb-1"
+              title={`${user.name || 'Usuário'} (${user.email})`}
+            >
+              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xs border border-indigo-200 shrink-0">
+                {getInitials(user.name || user.email)}
               </div>
             </div>
 

@@ -57,6 +57,7 @@ export default function ClientsPage() {
   // Estado da última sincronização FlexSmart
   const [lastSync, setLastSync] = useState<FlexSmartSyncStatus | null>(null)
   const [syncLoading, setSyncLoading] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
 
   // Modais de Criação/Edição e Exclusão
   const [searchParams, setSearchParams] = useSearchParams()
@@ -121,10 +122,12 @@ export default function ClientsPage() {
   const loadLastSync = useCallback(async () => {
     try {
       setSyncLoading(true)
+      setSyncError(null)
       const status = await flexSmartService.getLastSync()
       setLastSync(status)
     } catch (err) {
       console.warn('Erro ao carregar última sincronização FlexSmart:', err)
+      setSyncError('Não foi possível carregar o status da sincronização.')
     } finally {
       setSyncLoading(false)
     }
@@ -357,7 +360,12 @@ export default function ClientsPage() {
   return (
     <div className="space-y-6">
       {/* Card da Última Sincronização FlexSmart (no topo da tela, antes de tudo) */}
-      <FlexSmartSyncCard lastSync={lastSync} loading={syncLoading} onRefresh={loadLastSync} />
+      <FlexSmartSyncCard
+        lastSync={lastSync}
+        loading={syncLoading}
+        errorMessage={syncError}
+        onRefresh={loadLastSync}
+      />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

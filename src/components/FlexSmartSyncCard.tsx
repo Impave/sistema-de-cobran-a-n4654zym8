@@ -19,14 +19,64 @@ import type { FlexSmartSyncStatus } from '@/types'
 interface FlexSmartSyncCardProps {
   lastSync: FlexSmartSyncStatus | null
   loading?: boolean
+  errorMessage?: string | null
   onRefresh?: () => void
 }
 
 export const FlexSmartSyncCard: React.FC<FlexSmartSyncCardProps> = ({
   lastSync,
   loading = false,
+  errorMessage = null,
   onRefresh,
 }) => {
+  // Estado de erro de consulta (rede/servidor): não foi possível consultar o status atual
+  if (errorMessage && !loading) {
+    return (
+      <Card className="rounded-xl border border-amber-200 bg-amber-50/50 shadow-xs">
+        <CardContent className="p-4 sm:p-4.5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+                <AlertCircle className="w-4 h-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-slate-900">Última sincronização</h3>
+                  <Badge
+                    variant="outline"
+                    className="bg-amber-100/80 text-amber-800 border-amber-300 text-[11px] font-medium px-2 py-0.5"
+                  >
+                    Falha na consulta
+                  </Badge>
+                </div>
+                <p className="text-xs text-amber-800 mt-0.5">
+                  Não foi possível verificar o status atual da rotina FlexSmart no servidor. Tente
+                  atualizar novamente.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto text-xs text-slate-500">
+              <CalendarClock className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+              <span>Sincronização automática: 9h às 19h (seg a sex)</span>
+              {onRefresh && (
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={loading}
+                  title="Tentar consultar novamente"
+                  className="ml-1 p-1 rounded hover:bg-amber-100 text-amber-800 hover:text-amber-950 transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
+
   // Estado neutro: nenhuma sincronização registrada
   if (!loading && (!lastSync || !lastSync.id)) {
     return (

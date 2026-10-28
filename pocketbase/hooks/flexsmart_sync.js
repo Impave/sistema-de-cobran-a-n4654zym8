@@ -928,11 +928,9 @@ routerAdd('GET', '/backend/v1/flexsmart/last-sync', (e) => {
 
   let lastSyncRecord = null
   try {
-    lastSyncRecord = $app.findFirstRecordByFilter(
-      'flex_sync',
-      `owner = '${authUser.id}'`,
-      '-created',
-    )
+    // Retorna a sincronização mais recente global do sistema (agendada ou manual),
+    // garantindo visibilidade unificada para todos os usuários autenticados.
+    lastSyncRecord = $app.findFirstRecordByFilter('flex_sync', "id != ''", '-created')
   } catch (_) {}
 
   if (!lastSyncRecord) {

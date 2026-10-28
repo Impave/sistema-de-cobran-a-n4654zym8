@@ -100,8 +100,9 @@ export const flexSmartService = {
       if (record && record.id) {
         return mapRecordToSyncStatus(record)
       }
-    } catch (_) {
-      // Nenhum registro encontrado ou sem permissão
+    } catch (fallbackErr) {
+      console.warn('[flexSmartService] Fallback na coleção flex_sync falhou:', fallbackErr)
+      throw fallbackErr
     }
 
     return null

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-28T14:25:43.577Z",
+  "generatedAt": "2026-10-28T16:53:49.463Z",
   "collections": [
     {
       "name": "users",
@@ -261,8 +261,8 @@
       "name": "flex_sync",
       "type": "base",
       "apiRules": {
-        "list": "@request.auth.id != '' && owner = @request.auth.id",
-        "view": "@request.auth.id != '' && owner = @request.auth.id",
+        "list": "@request.auth.id != ''",
+        "view": "@request.auth.id != ''",
         "create": "@request.auth.id != ''",
         "update": "@request.auth.id != '' && owner = @request.auth.id",
         "delete": "@request.auth.id != '' && owner = @request.auth.id"

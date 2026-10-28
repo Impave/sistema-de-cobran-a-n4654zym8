@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-10-27T13:34:50.401Z",
+  "generatedAt": "2026-10-28T13:54:07.184Z",
   "collections": [
     {
       "name": "users",
@@ -90,12 +90,6 @@
           "autodateTriggers": ["onCreate", "onUpdate"]
         },
         {
-          "name": "cod_cliente",
-          "type": "text",
-          "required": false,
-          "system": false
-        },
-        {
           "name": "nome_cliente",
           "type": "text",
           "required": false,
@@ -160,16 +154,22 @@
           "type": "text",
           "required": false,
           "system": false
+        },
+        {
+          "name": "cod_cliente",
+          "type": "number",
+          "required": false,
+          "system": false
         }
       ],
       "indexes": [
         "CREATE INDEX idx_clients_owner ON clients (owner)",
         "CREATE INDEX idx_clients_created ON clients (created)",
-        "CREATE INDEX `idx_clients_cod_cliente` ON `clients` (cod_cliente)",
         "CREATE INDEX `idx_clients_nome_cliente` ON `clients` (nome_cliente)",
         "CREATE INDEX `idx_clients_razao_social` ON `clients` (razao_social)",
         "CREATE INDEX `idx_clients_cnpj_cpf` ON `clients` (cnpj_cpf)",
-        "CREATE INDEX `idx_clients_cidade` ON `clients` (cidade)"
+        "CREATE INDEX `idx_clients_cidade` ON `clients` (cidade)",
+        "CREATE INDEX `idx_clients_cod_cliente` ON `clients` (cod_cliente)"
       ]
     },
     {

@@ -526,8 +526,12 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
     const item = erpItems[i]
     if (!item) continue
 
-    const codCliente =
-      item.cdCliente !== undefined && item.cdCliente !== null ? String(item.cdCliente).trim() : ''
+    const rawCodCliente =
+      item.cdCliente !== undefined && item.cdCliente !== null
+        ? String(item.cdCliente).replace(/\D/g, '')
+        : ''
+    const codClienteNum = rawCodCliente ? parseInt(rawCodCliente, 10) : null
+    const codCliente = codClienteNum && !isNaN(codClienteNum) ? codClienteNum : null
     const rawName = item.nmCliente || item.nmFantasia || item.nome || ''
     const nomeCliente = String(rawName).trim()
     if (!nomeCliente || nomeCliente.length < 2) continue
@@ -561,11 +565,11 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
     // Busca cliente existente por cod_cliente ou por cnpj_cpf ou por nome_cliente idêntico
     let existingClient = null
 
-    if (codCliente) {
+    if (codCliente !== null) {
       try {
         existingClient = $app.findFirstRecordByFilter(
           'clients',
-          `owner = '${authUser.id}' && cod_cliente = '${codCliente}'`,
+          `owner = '${authUser.id}' && cod_cliente = ${codCliente}`,
         )
       } catch (_) {}
     }
@@ -592,7 +596,7 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
     try {
       if (existingClient) {
         let changed = false
-        if (codCliente && existingClient.getString('cod_cliente') !== codCliente) {
+        if (codCliente !== null && existingClient.getInt('cod_cliente') !== codCliente) {
           existingClient.set('cod_cliente', codCliente)
           changed = true
         }
@@ -649,7 +653,7 @@ routerAdd('POST', '/backend/v1/flexsmart/step-sync/{id}', (e) => {
         const newClient = new Record(clientsCol)
         newClient.set('owner', authUser.id)
         newClient.set('nome_cliente', nomeCliente)
-        if (codCliente) newClient.set('cod_cliente', codCliente)
+        if (codCliente !== null) newClient.set('cod_cliente', codCliente)
         if (razaoSocial) newClient.set('razao_social', razaoSocial)
         if (cleanDoc) newClient.set('cnpj_cpf', cleanDoc)
         if (contato1) newClient.set('contato1', contato1)
@@ -1166,6 +1170,11 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
   let filter = "id != ''"
   if (search) {
     const escaped = search.replace(/'/g, "\\'")
+    const cleanNum = search.replace(/\D/g, '')
+    let codeCondition = ''
+    if (cleanNum) {
+      codeCondition = ' || cod_cliente = ' + cleanNum
+    }
     filter =
       filter +
       " && (nome_cliente ~ '" +
@@ -1174,9 +1183,9 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
       escaped +
       "' || cnpj_cpf ~ '" +
       escaped +
-      "' || cod_cliente ~ '" +
-      escaped +
-      "' || email1 ~ '" +
+      "'" +
+      codeCondition +
+      " || email1 ~ '" +
       escaped +
       "' || cidade ~ '" +
       escaped +
@@ -1196,7 +1205,7 @@ routerAdd('GET', '/backend/v1/shared/clients', (e) => {
       const r = records[i]
       items.push({
         id: r.id,
-        cod_cliente: r.getString('cod_cliente'),
+        cod_cliente: r.getInt('cod_cliente') || null,
         nome_cliente: r.getString('nome_cliente'),
         razao_social: r.getString('razao_social'),
         cnpj_cpf: r.getString('cnpj_cpf'),
@@ -1614,8 +1623,12 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
     const item = erpItems[i]
     if (!item) continue
 
-    const codCliente =
-      item.cdCliente !== undefined && item.cdCliente !== null ? String(item.cdCliente).trim() : ''
+    const rawCodCliente =
+      item.cdCliente !== undefined && item.cdCliente !== null
+        ? String(item.cdCliente).replace(/\D/g, '')
+        : ''
+    const codClienteNum = rawCodCliente ? parseInt(rawCodCliente, 10) : null
+    const codCliente = codClienteNum && !isNaN(codClienteNum) ? codClienteNum : null
     const rawName = item.nmCliente || item.nmFantasia || item.nome || ''
     const nomeCliente = String(rawName).trim()
     if (!nomeCliente || nomeCliente.length < 2) continue
@@ -1652,12 +1665,9 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
     // 3. ou nome_cliente idêntico
     let existingClient = null
 
-    if (codCliente) {
+    if (codCliente !== null) {
       try {
-        existingClient = $app.findFirstRecordByFilter(
-          'clients',
-          "cod_cliente = '" + codCliente + "'",
-        )
+        existingClient = $app.findFirstRecordByFilter('clients', 'cod_cliente = ' + codCliente)
       } catch (_) {}
     }
 
@@ -1680,7 +1690,7 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
     try {
       if (existingClient) {
         let changed = false
-        if (codCliente && existingClient.getString('cod_cliente') !== codCliente) {
+        if (codCliente !== null && existingClient.getInt('cod_cliente') !== codCliente) {
           existingClient.set('cod_cliente', codCliente)
           changed = true
         }
@@ -1737,7 +1747,7 @@ cronAdd('flexsmart_hourly_sync', '0 12-22 * * 1-5', () => {
         const newClient = new Record(clientsCol)
         newClient.set('owner', ownerId)
         newClient.set('nome_cliente', nomeCliente)
-        if (codCliente) newClient.set('cod_cliente', codCliente)
+        if (codCliente !== null) newClient.set('cod_cliente', codCliente)
         if (razaoSocial) newClient.set('razao_social', razaoSocial)
         if (cleanDoc) newClient.set('cnpj_cpf', cleanDoc)
         if (contato1) newClient.set('contato1', contato1)

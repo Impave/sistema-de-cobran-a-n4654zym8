@@ -37,7 +37,6 @@ export const clientsService = {
       const conditions: string[] = [
         `nome_cliente ~ "${safeQ}"`,
         `razao_social ~ "${safeQ}"`,
-        `cod_cliente ~ "${safeQ}"`,
         `cidade ~ "${safeQ}"`,
         `bairro ~ "${safeQ}"`,
         `estado ~ "${safeQ}"`,
@@ -47,7 +46,7 @@ export const clientsService = {
       ]
       if (cleanDigits) {
         conditions.push(`cnpj_cpf ~ "${cleanDigits}"`)
-        conditions.push(`cod_cliente = "${cleanDigits}"`)
+        conditions.push(`cod_cliente = ${cleanDigits}`)
         conditions.push(`contato1 ~ "${cleanDigits}"`)
         conditions.push(`contato2 ~ "${cleanDigits}"`)
       }
@@ -94,11 +93,17 @@ export const clientsService = {
 
     const cleanContato1 = data.contato1 ? data.contato1.replace(/\D/g, '') : ''
     const cleanContato2 = data.contato2 ? data.contato2.replace(/\D/g, '') : ''
-    const cleanCodCliente = (data.cod_cliente || data.erp_code || '').trim()
+    const rawCod =
+      data.cod_cliente !== undefined && data.cod_cliente !== null
+        ? String(data.cod_cliente).replace(/\D/g, '')
+        : data.erp_code
+          ? String(data.erp_code).replace(/\D/g, '')
+          : ''
+    const codClienteNum = rawCod ? parseInt(rawCod, 10) : null
 
     return await pb.collection('clients').create<ClientRecord>({
       owner: user.id,
-      cod_cliente: cleanCodCliente || '',
+      cod_cliente: codClienteNum && !isNaN(codClienteNum) ? codClienteNum : null,
       nome_cliente: data.nome_cliente ? data.nome_cliente.trim() : '',
       razao_social: data.razao_social ? data.razao_social.trim() : '',
       cnpj_cpf: cleanCnpjCpf,
@@ -129,10 +134,13 @@ export const clientsService = {
       payload.contato2 = payload.contato2 ? payload.contato2.replace(/\D/g, '') : ''
     }
     if (payload.erp_code !== undefined && payload.cod_cliente === undefined) {
-      payload.cod_cliente = payload.erp_code ? payload.erp_code.trim() : ''
+      payload.cod_cliente = payload.erp_code
     }
     if (payload.cod_cliente !== undefined) {
-      payload.cod_cliente = payload.cod_cliente ? payload.cod_cliente.trim() : ''
+      const rawCod =
+        payload.cod_cliente !== null ? String(payload.cod_cliente).replace(/\D/g, '') : ''
+      const num = rawCod ? parseInt(rawCod, 10) : null
+      payload.cod_cliente = num && !isNaN(num) ? num : null
     }
     delete payload.erp_code
     if (payload.nome_cliente !== undefined) {

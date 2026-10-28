@@ -34,7 +34,7 @@ export interface UsersPaginatedResponse {
 export interface ClientRecord {
   id: string
   owner: string
-  cod_cliente?: string
+  cod_cliente?: number | string | null
   nome_cliente?: string
   razao_social?: string
   cnpj_cpf: string
@@ -127,7 +127,7 @@ export interface ChargeRecord {
 }
 
 export interface ClientFormData {
-  cod_cliente?: string
+  cod_cliente?: number | string | null
   nome_cliente?: string
   razao_social?: string
   cnpj_cpf: string

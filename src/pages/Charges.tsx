@@ -721,7 +721,11 @@ export default function ChargesPage() {
                     {clients.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
                         {c.nome_cliente || c.razao_social}{' '}
-                        {c.cod_cliente ? `[#${c.cod_cliente}]` : ''}{' '}
+                        {c.cod_cliente !== undefined &&
+                        c.cod_cliente !== null &&
+                        c.cod_cliente !== ''
+                          ? `[${c.cod_cliente}]`
+                          : ''}{' '}
                         {c.email1 ? `(${c.email1})` : ''}
                       </SelectItem>
                     ))}

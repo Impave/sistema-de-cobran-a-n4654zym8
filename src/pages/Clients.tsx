@@ -282,10 +282,18 @@ export default function ClientsPage() {
     const displayName =
       finalName || (formData.razao_social || '').trim() || formData.cnpj_cpf || 'Cliente'
 
+    // Trata código numérico: apenas dígitos, sem pontos
+    const rawCod =
+      formData.cod_cliente !== undefined && formData.cod_cliente !== null
+        ? String(formData.cod_cliente).replace(/\D/g, '')
+        : ''
+    const codClienteNum = rawCod ? parseInt(rawCod, 10) : null
+
     setFormLoading(true)
     try {
       const payload: ClientFormData = {
         ...formData,
+        cod_cliente: codClienteNum && !isNaN(codClienteNum) ? codClienteNum : null,
         nome_cliente: finalName,
         cnpj_cpf: formData.cnpj_cpf,
       }
@@ -480,7 +488,7 @@ export default function ClientsPage() {
                         }
                       >
                         <td className="py-3.5 px-4 whitespace-nowrap">
-                          {cod ? (
+                          {cod !== undefined && cod !== null && cod !== '' ? (
                             <span
                               className="inline-flex items-center gap-1 font-mono text-xs font-semibold px-2 py-0.5 rounded-md bg-indigo-50/80 text-indigo-700 border border-indigo-200/70"
                               title={`Código ERP (cd_cliente): ${cod}`}
@@ -661,8 +669,8 @@ export default function ClientsPage() {
                     <div className="grid grid-cols-3 gap-2 text-xs pt-2 border-t border-slate-100">
                       <div>
                         <span className="text-slate-400 block text-[11px]">Código</span>
-                        {cod ? (
-                          <span className="font-mono font-semibold text-indigo-700">#{cod}</span>
+                        {cod !== undefined && cod !== null && cod !== '' ? (
+                          <span className="font-mono font-semibold text-indigo-700">{cod}</span>
                         ) : (
                           <span className="text-slate-400">-</span>
                         )}
@@ -832,13 +840,23 @@ export default function ClientsPage() {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <Label htmlFor="c-cod-cliente" className="text-xs font-semibold text-slate-700">
-                  Código ERP (cod_cliente)
+                  Código ERP (cdCliente)
                 </Label>
                 <Input
                   id="c-cod-cliente"
-                  value={formData.cod_cliente || ''}
-                  onChange={(e) => setFormData({ ...formData, cod_cliente: e.target.value })}
-                  placeholder="Ex: 20445"
+                  type="text"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  value={
+                    formData.cod_cliente !== undefined && formData.cod_cliente !== null
+                      ? String(formData.cod_cliente)
+                      : ''
+                  }
+                  onChange={(e) => {
+                    const onlyNums = e.target.value.replace(/\D/g, '')
+                    setFormData({ ...formData, cod_cliente: onlyNums })
+                  }}
+                  placeholder="Ex: 58978"
                   className="mt-1 text-sm font-mono"
                 />
               </div>
